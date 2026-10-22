@@ -1,3 +1,26 @@
+# Beta 1.1.1-beta.2
+
+This beta combines feedback screenshot improvements (#73) and bounded response completion (#74). Stable remains v1.1.0. The release body is maintained in `electron/release-notes.md`.
+
+## Candidate validation
+
+- Linux and both signed/notarized macOS builds passed in [candidate run 39710758529](https://github.com/gitmaan/stellaris-companion/actions/runs/39710758529). Release validation passed 516 backend tests, 37 Rust tests, 104 desktop tests, and 94 Electron journeys, with expected fixture/platform skips.
+- All seven installed Windows journeys passed with no skips or retries in [candidate run 39714035700](https://github.com/gitmaan/stellaris-companion/actions/runs/39714035700). The gate confirms the live bundled backend executable on both launches. The first run exposed a test-only race in capturing an early stdout line; the app payload is identical between the two runs.
+- The tested Windows candidate installer has SHA-256 `3b622bc8b1c616814cd4821588355f5baaa172bce071b36405514538a2e3cd1c`. Publication rebuilds from the final main commit and repeats the installed-app gate, so verify that run's installer hash separately.
+
+## Release gate
+
+- Build all four platforms through a manual `electron-release.yml` run with publication disabled.
+- On Windows, silently install that run's NSIS executable into a fresh runner directory and launch the installed executable with Playwright; verify `app.isPackaged`, the executable path, archive path, and app version.
+- Require real bundled-backend startup, isolated profile restoration, offline Chinese/Japanese catalog and page loading, long Chinese answer scrolling/Copy at three simulated display scales, partial-answer retry after app restart, and screenshot preview/opt-in submission journeys. UI responses use a controlled backend; the separate startup journey uses the packaged backend.
+- Save installer hashes, results, logs, and screenshots as `packaged-windows-proof-1.1.1-beta.2`. The same gate runs before a tagged release can be published.
+- Deploy the tested feedback Worker before shipping the desktop diagnostics changes.
+- Once the candidate and PR checks pass, merge, tag the final main commit, and verify the published beta manifests and unchanged stable release/feed.
+
+Physical monitor/GPU/DPI behavior, paid-provider gameplay, and the original reporters' exact symptoms still need user evidence. Keep #71/#72 open until that evidence or reporter confirmation arrives. The gate does not exercise real update download/install/restart.
+
+## Previous beta and stable validation record
+
 # 1.1.1-beta.1 release validation
 
 This beta candidate combines the visual quality changes in [#66](https://github.com/gitmaan/stellaris-companion/pull/66), frontend performance improvements in [#69](https://github.com/gitmaan/stellaris-companion/pull/69), and transmission startup fixes in [#68](https://github.com/gitmaan/stellaris-companion/pull/68). Stable remains [v1.1.0](https://github.com/gitmaan/stellaris-companion/releases/tag/v1.1.0) until a separate stable release is published.
