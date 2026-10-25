@@ -7,8 +7,9 @@ coverage when a new game version has not yet been fully audited.
 ## How It Works
 
 1. The app reads the Stellaris version from the save.
-2. The shared resolver selects an exact snapshot, a compatible snapshot and overlays, or a
-   notes-only pack for an audited breaking release line.
+2. The shared resolver selects the facts that hold for that version from the concept-note
+   knowledge graph (4.4.6 and newer), or, for older saves, an exact snapshot, a compatible
+   snapshot and overlays, or a notes-only pack for an audited breaking release line.
 3. The context is added to both Advisor and Chronicle prompts alongside extracted campaign facts.
 4. Unknown newer release lines do not receive older mechanics presented as current.
 
@@ -41,33 +42,17 @@ by a maintainer for substantive correctness, allowing normal variation in wordin
 
 Source and coverage decisions for each stable snapshot live in `patches/audits/`.
 
-## Topic Selection and Keywords
+## Knowledge Graph
 
-Advisor prompts keep the critical baseline and guardrails, then add the few sections that match
-the question. Small release-line deltas (overlays newer than the snapshot, or a notes-only pack)
-are always included because each one corrects a stale belief. When nothing matches, the earlier
-questions in the conversation are tried; failing that, the prompt lists the omitted sections so
-the model knows which areas have version-specific rules.
+From 4.4.6 onward, mechanics live as concept notes in `patches/knowledge/concepts/`, one concept
+per note, linked with `[[Wikilinks]]` (the folder opens as an Obsidian vault). Each fact carries
+`{since: X}` and, once superseded, `{until: Y}`, so every save receives the rules of its own
+version. Each note lists the words players use for it in every app language, which lets questions
+in any language reach the right facts. Older saves keep using the snapshot and release-note files
+above. See `docs/knowledge-graph.md` for the format, resolution rules, and maintenance pipeline.
 
-Section titles are English, so every topic section carries keywords for the app's player
-languages in a comment directly under its heading. Comments never reach the model:
-
-```markdown
-## Naval Capacity & Fleets
-<!-- keywords
-en: naval capacity, command limit, anchorage
-ja: 艦隊上限, 停泊所
-zh-Hans: 海军容量, 锚地
-de: Flottenkapazität
-fr: capacité navale
-es: capacidad naval
-pt-BR: capacidade naval
--->
-```
-
-Latin-script keywords match whole words (all words of a phrase must appear); Japanese and Chinese
-keywords match as substrings, so avoid very short or generic terms. `tests/test_game_knowledge.py`
-requires keywords for every locale in the newest snapshot and in each newer release-note pack.
+When a release changes a mechanic, close the old fact with `until`, add the new fact with
+`since`, and raise a note's `verified_through` only after checking the shipped game.
 
 Before shipping, run `tests/test_game_knowledge.py` and record cross-provider responses with
 `scripts/experiments/eval_game_knowledge.py` for human review. Test stale premises that a model

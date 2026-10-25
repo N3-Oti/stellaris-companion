@@ -1,18 +1,11 @@
 from pathlib import Path
 
 from stellaris_companion.game_knowledge import (
-    DEFAULT_PATCHES_DIR,
-    DEFAULT_SNAPSHOTS_DIR,
     DELTA_ALWAYS_INCLUDE_CHARS,
     _find_default_patches_dir,
     build_game_knowledge_prompt,
-    list_versioned_markdown,
     load_game_knowledge,
-    parse_section_keywords,
-    parse_version,
 )
-
-PLAYER_LOCALES = ("ja", "zh-Hans", "de", "fr", "es", "pt-BR")
 
 
 def test_patch_resources_resolve_from_pyinstaller_sibling_layout(tmp_path: Path):
@@ -277,7 +270,7 @@ def test_unmatched_question_lists_omitted_sections_instead_of_full_snapshot():
 
     assert "## Critical 4.x Baseline" in prompt
     assert "Other verified mechanics areas for this version" in prompt
-    assert "- Naval Capacity & Fleets: Fleet Scale, Anchorages" in prompt
+    assert "- Naval Capacity: Fleet Scale, Anchorages" in prompt
     assert "A normal Anchorage adds 5 Naval Capacity" not in prompt
 
 
@@ -308,31 +301,3 @@ def test_keyword_comments_never_reach_the_model():
         assert "keywords" not in content
         assert "ja:" not in content
         assert "\n\n\n" not in content
-
-
-def test_current_knowledge_sections_have_keywords_for_every_player_locale():
-    snapshot_versions = list_versioned_markdown(DEFAULT_SNAPSHOTS_DIR)
-    newest_snapshot = snapshot_versions[-1]
-    newest_key = parse_version(newest_snapshot)
-    current_files = [DEFAULT_SNAPSHOTS_DIR / f"{newest_snapshot}.md"] + [
-        DEFAULT_PATCHES_DIR / f"{version}.md"
-        for version in list_versioned_markdown(DEFAULT_PATCHES_DIR)
-        if (key := parse_version(version)) is not None
-        and newest_key is not None
-        and key > newest_key
-    ]
-
-    for path in current_files:
-        text = path.read_text(encoding="utf-8")
-        keywords = parse_section_keywords(text)
-        for section in text.split("\n#")[1:]:
-            title = section.lstrip("#").splitlines()[0].strip()
-            if "**" not in section.split("\n#")[0] or title in {
-                "Critical 4.x Baseline",
-                "Interpretation Guardrails",
-            }:
-                continue
-            if title not in keywords:
-                raise AssertionError(f"{path.name}: '{title}' has no keywords")
-            missing = [locale for locale in PLAYER_LOCALES if not keywords[title].get(locale)]
-            assert not missing, f"{path.name}: '{title}' lacks keywords for {missing}"

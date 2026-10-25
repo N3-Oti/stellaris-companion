@@ -454,17 +454,66 @@ def build_game_knowledge_prompt(
     max_topic_sections: int = 3,
     patches_dir: Path = DEFAULT_PATCHES_DIR,
     snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
+    knowledge_dir: Path | None = None,
 ) -> str:
     """Build shared evidence rules and verified mechanics for a model system prompt.
 
+    Versions covered by the concept-note graph (``patches/knowledge``) resolve through
+    it; older versions use the snapshot and release-note files.
     ``fallback_topics`` (such as recent questions) is consulted only when ``topics``
     matches no section, so follow-up questions keep their earlier subject.
     """
-    knowledge = load_game_knowledge(
-        version,
-        patches_dir=patches_dir,
-        snapshots_dir=snapshots_dir,
-    )
+    from .knowledge_graph import graph_covers, load_knowledge_graph, resolve_graph_knowledge
+
+    target_key = parse_version(extract_version(version) or "")
+    graph = load_knowledge_graph(knowledge_dir or patches_dir / "knowledge")
+    if graph is not None and target_key is not None and graph_covers(graph, target_key):
+        resolved = resolve_graph_knowledge(
+            graph,
+            target_key,
+            topics=topics,
+            fallback_topics=fallback_topics,
+            limit=max(0, max_topic_sections),
+        )
+        status = resolved.status
+        loaded_through = resolved.loaded_through
+        knowledge_content = resolved.content
+        notes_only = status == "notes_only"
+        has_knowledge = status in {"exact", "partial", "notes_only"}
+    else:
+        knowledge = load_game_knowledge(
+            version,
+            patches_dir=patches_dir,
+            snapshots_dir=snapshots_dir,
+        )
+        status = knowledge.status
+        loaded_through = knowledge.loaded_through
+        has_knowledge = bool(knowledge.content)
+        knowledge_content = knowledge.content
+        if knowledge_content and topics is not None:
+            knowledge_content = _select_relevant_sections(
+                knowledge_content,
+                topics,
+                limit=max(0, max_topic_sections),
+                section_keywords=knowledge.section_keywords,
+                delta_offset=knowledge.delta_offset,
+                fallback_topics=fallback_topics,
+            )
+        loaded_key = parse_version(knowledge.loaded_through or "")
+        legacy_target = parse_version(knowledge.target_version or "")
+        notes_only = bool(
+            loaded_key is not None
+            and legacy_target is not None
+            and legacy_target[:2] in BREAKING_SNAPSHOT_BOUNDARIES
+            and loaded_key[:2] == legacy_target[:2]
+            and not any(
+                (key := parse_version(item)) is not None
+                and key[:2] == legacy_target[:2]
+                and key <= legacy_target
+                for item in list_versioned_markdown(snapshots_dir)
+            )
+        )
+
     purpose_rule = (
         "Use mechanics to explain the recorded world, never as evidence that an event "
         "occurred. Do not add a name, identity, participant, place, action, motive, cause, "
@@ -489,18 +538,7 @@ def build_game_knowledge_prompt(
         purpose_rule,
     ]
 
-    knowledge_content = knowledge.content
-    if knowledge_content and topics is not None:
-        knowledge_content = _select_relevant_sections(
-            knowledge_content,
-            topics,
-            limit=max(0, max_topic_sections),
-            section_keywords=knowledge.section_keywords,
-            delta_offset=knowledge.delta_offset,
-            fallback_topics=fallback_topics,
-        )
-
-    if knowledge_content and knowledge.status == "exact":
+    if knowledge_content and status == "exact":
         lines.extend(
             [
                 "",
@@ -511,25 +549,11 @@ def build_game_knowledge_prompt(
             ]
         )
     elif knowledge_content:
-        loaded_key = parse_version(knowledge.loaded_through or "")
-        target_key = parse_version(knowledge.target_version or "")
-        notes_only = bool(
-            loaded_key is not None
-            and target_key is not None
-            and target_key[:2] in BREAKING_SNAPSHOT_BOUNDARIES
-            and loaded_key[:2] == target_key[:2]
-            and not any(
-                (key := parse_version(item)) is not None
-                and key[:2] == target_key[:2]
-                and key <= target_key
-                for item in list_versioned_markdown(snapshots_dir)
-            )
-        )
         if notes_only:
             lines.extend(
                 [
                     "",
-                    f"Only the listed mechanics changes are verified through {knowledge.loaded_through}.",
+                    f"Only the listed mechanics changes are verified through {loaded_through}.",
                     f"The campaign reports {version}; other mechanics remain unverified for this version.",
                     "Do not carry forward older-version rules without campaign evidence.",
                     "Use the following only when it agrees with supplied campaign evidence:",
@@ -541,18 +565,18 @@ def build_game_knowledge_prompt(
             lines.extend(
                 [
                     "",
-                    f"Mechanics coverage is verified only through {knowledge.loaded_through}.",
+                    f"Mechanics coverage is verified only through {loaded_through}.",
                     f"The campaign reports {version}; do not assume older details remained unchanged.",
                     "Use the following only when it agrees with supplied campaign evidence:",
                     "",
                     knowledge_content,
                 ]
             )
-    elif knowledge.content and topics is not None:
+    elif has_knowledge and topics is not None:
         lines.extend(
             [
                 "",
-                f"Verified mechanics are available through {knowledge.loaded_through},",
+                f"Verified mechanics are available through {loaded_through},",
                 "but no topic-specific mechanics section was needed for this request.",
                 "Rely on supplied campaign evidence and the evidence hierarchy above.",
             ]
