@@ -91,13 +91,20 @@ NEWS = {
 
 
 class FakeGenerator:
+    """Answers each request type from its own queue: release analyses or note terms."""
+
     def __init__(self, responses: list[dict]):
-        self.responses = list(responses)
+        self.analyses = [response for response in responses if "facts" in response]
+        self.terms = [response for response in responses if "facts" not in response]
         self.calls: list[str] = []
 
-    def generate(self, *, system_prompt: str, user_prompt: str, **_: object):
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs: object):
         self.calls.append(user_prompt)
-        return SimpleNamespace(text=json.dumps(self.responses.pop(0)))
+        if kwargs.get("schema_name") == "ReleaseAnalysis":
+            response = self.analyses.pop(0) if self.analyses else {"facts": [], "skipped_lines": []}
+        else:
+            response = self.terms.pop(0)
+        return SimpleNamespace(text=json.dumps(response))
 
     def close(self) -> None:
         pass
@@ -105,6 +112,7 @@ class FakeGenerator:
 
 def _proposal(**overrides: object) -> dict:
     base = {
+        "lines": [1],
         "quote": "Branch Offices now cost 100 Influence plus 5 Influence per jump.",
         "note": "Branch Offices",
         "new_note": False,
@@ -197,7 +205,7 @@ def test_generator_requires_an_explicit_provider_and_model(monkeypatch, environm
 
 
 def test_gemini_defaults_to_the_advisor_model(monkeypatch):
-    from backend.core.model_routing import GEMINI_FLASH_MODEL
+    from backend.core.model_routing import GEMINI_FLASH_LITE_MODEL
 
     monkeypatch.setenv("KNOWLEDGE_PROVIDER", "gemini")
     monkeypatch.delenv("KNOWLEDGE_MODEL", raising=False)
@@ -205,7 +213,7 @@ def test_gemini_defaults_to_the_advisor_model(monkeypatch):
 
     generator = pipeline.create_generator()
 
-    assert generator.config.model == GEMINI_FLASH_MODEL
+    assert generator.config.model == GEMINI_FLASH_LITE_MODEL
 
 
 def test_unreviewed_releases_skip_known_and_pre_graph_versions():
@@ -231,7 +239,9 @@ def test_review_rejects_unquoted_historical_and_misplaced_facts():
     source = pipeline.clean_bbcode(RELEASE_TEXT)
     proposals = [
         pipeline.ProposedFact(**_proposal()),
-        pipeline.ProposedFact(**_proposal(quote="Branch Offices are free for everyone forever.")),
+        pipeline.ProposedFact(
+            **_proposal(lines=[], quote="Branch Offices are free for everyone forever.")
+        ),
         pipeline.ProposedFact(
             **_proposal(label="Office Cost", fact="Branch Offices now cost more.")
         ),
@@ -243,7 +253,7 @@ def test_review_rejects_unquoted_historical_and_misplaced_facts():
 
     assert [proposal.label for proposal in review.accepted] == ["Branch Offices"]
     assert [reason for _, reason in review.rejected] == [
-        "quote not found in the release notes",
+        "cites no release-note line",
         "uses change-history wording",
         "unknown note 'Imaginary Note'",
         "fact to supersede 'Missing Label' not found",
@@ -254,14 +264,15 @@ def test_update_writes_reviewable_graph_changes(knowledge_copy: Path, tmp_path: 
     news_file = tmp_path / "news.json"
     news_file.write_text(json.dumps(NEWS), encoding="utf-8")
     forge = _proposal(
-        quote="The Quantum Forge converts 10 Alloys into 1 Dark Matter each month.",
+        lines=[3],
+        quote="",
         note="Quantum Forge",
         new_note=True,
         label="Quantum Forge",
         fact="The Quantum Forge converts 10 Alloys into 1 Dark Matter each month.",
         related=["Districts & Buildings", "Not A Note"],
     )
-    generator = FakeGenerator([{"facts": [_proposal(), forge]}, TERMS])
+    generator = FakeGenerator([{"facts": [_proposal(), forge], "skipped_lines": [2]}, TERMS])
     monkeypatch.setattr(pipeline, "create_generator", lambda: generator)
     summary = tmp_path / "summary.md"
 
@@ -572,3 +583,47 @@ def test_billing_errors_are_not_retried(monkeypatch):
     with pytest.raises(AdvisorProviderError):
         pipeline.ModelRecorder(Billing()).generate(system_prompt="", user_prompt="")
     assert waits == []
+
+
+def test_release_lines_are_numbered_with_headings_kept_per_excerpt():
+    text = "Hello!\n\nBalance\n\n- First change.\n\n- Second change.\n\nBugfix\n\n- Third change."
+
+    whole = pipeline.number_release_lines(text, 1000)
+    split = pipeline.number_release_lines(text, 40)
+
+    assert whole[0].lines == {1: "First change.", 2: "Second change.", 3: "Third change."}
+    assert "Balance\nL1: First change." in whole[0].text
+    assert len(split) > 1
+    assert split[-1].text.startswith("Bugfix") or split[-1].text.startswith("Balance")
+
+
+def test_unclassified_lines_are_asked_about_again(knowledge_copy: Path):
+    graph = load_knowledge_graph(knowledge_copy)
+    release = pipeline.ReleaseNote("4.5.2", "t", "u", pipeline.clean_bbcode(RELEASE_TEXT))
+    generator = FakeGenerator(
+        [
+            {"facts": [_proposal()], "skipped_lines": []},
+            {"facts": [], "skipped_lines": [2]},
+        ]
+    )
+
+    proposals, problems = pipeline.propose_facts(generator, release, graph, chunk_chars=24000)
+
+    assert len(generator.calls) == 2
+    assert "L2: Fixed a crash when opening the market." in generator.calls[1]
+    assert "L3: The Quantum Forge" in generator.calls[1]
+    assert problems == [
+        "Lines never classified by the model: L3 (The Quantum Forge converts 10 Alloys into 1 Dark Matter each)"
+    ]
+    assert proposals[0].quote == "Branch Offices now cost 100 Influence plus 5 Influence per jump."
+
+
+def test_prose_announcements_number_every_line():
+    text = (
+        "We are pleased to announce the update.\n\nArkships can now settle anywhere once "
+        "their crew is large enough, and Waystations cost half as much to build.\n\n- A short bullet."
+    )
+
+    excerpt = pipeline.number_release_lines(text)[0]
+
+    assert len(excerpt.lines) == 3

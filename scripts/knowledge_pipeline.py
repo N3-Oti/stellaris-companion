@@ -13,7 +13,7 @@ See docs/knowledge-graph.md.
 Provider settings come from the environment, so no provider is fixed:
     KNOWLEDGE_PROVIDER   gemini, openrouter, custom, ollama, or lm_studio (required)
     KNOWLEDGE_MODEL      model ID; required except for gemini, which defaults to the
-                         Advisor's GEMINI_FLASH_MODEL in backend/core/model_routing.py
+                         Advisor's GEMINI_FLASH_LITE_MODEL in backend/core/model_routing.py
     KNOWLEDGE_BASE_URL   OpenAI-compatible base URL (custom; ollama and lm_studio and
                          openrouter have defaults)
     KNOWLEDGE_API_KEY    API key for the provider
@@ -99,7 +99,7 @@ _LAUNCH_WORDS = re.compile(r"\b(available now|is available|now available|out now
 FORUM_ONLY_HINT_CHARS = 2000
 # Model-facing facts are present tense; change history confuses models and players.
 _HISTORY_WORDS = re.compile(
-    r"\b(now|anymore|used to|no longer|previously|formerly|was changed|were changed|"
+    r"\b(now|anymore|instead|used to|no longer|previously|formerly|was changed|were changed|"
     r"has been|have been|changed|increased|decreased|reduced|patch(?:es|ed)?|"
     r"hotfix(?:es)?)\b",
     re.IGNORECASE,
@@ -121,7 +121,10 @@ class ReleaseNote:
 
 
 class ProposedFact(BaseModel):
-    quote: str = Field(description="Exact sentence copied from the release notes.")
+    lines: list[int] = Field(
+        default_factory=list, description="Numbers of the release-note lines (L#) it comes from."
+    )
+    quote: str = Field(default="", description="Leave empty; filled from the cited lines.")
     note: str = Field(description="Existing note title, or the title of a new note.")
     new_note: bool = Field(description="True only when no existing note fits.")
     label: str = Field(description="Short bold label, 1-5 words.")
@@ -138,6 +141,58 @@ class ProposedFact(BaseModel):
 
 class ReleaseAnalysis(BaseModel):
     facts: list[ProposedFact]
+    skipped_lines: list[int] = Field(
+        default_factory=list, description="Numbers of lines that change nothing in play."
+    )
+
+
+@dataclass(frozen=True)
+class NumberedExcerpt:
+    """Release-note text with numbered change lines, plus the text of each number."""
+
+    text: str
+    lines: dict[int, str]
+
+
+def number_release_lines(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> list[NumberedExcerpt]:
+    """Number each change line so every one can be accounted for, split into excerpts.
+
+    Bullets are the change lines when they carry most of a post; otherwise every line is. Short
+    unnumbered lines are treated as section headings and repeated at each excerpt start.
+    """
+    raw = [line.strip() for line in text.splitlines() if line.strip()]
+    # Prose-style announcements carry their changes in paragraphs, not bullets.
+    bullet_chars = sum(len(line) for line in raw if line.startswith("- "))
+    has_bullets = bullet_chars * 2 >= sum(len(line) for line in raw)
+    excerpts: list[NumberedExcerpt] = []
+    entries: list[str] = []
+    numbered: dict[int, str] = {}
+    heading: str | None = None
+    size = 0
+    number = 0
+    for line in raw:
+        is_change = line.startswith("- ") if has_bullets else True
+        if is_change:
+            number += 1
+            content = line[2:].strip() if line.startswith("- ") else line
+            entry = f"L{number}: {content}"
+        else:
+            content = ""
+            entry = line
+            if len(line) <= 80 and not line.endswith((".", "!", "?", ":")):
+                heading = line
+        if numbered and size + len(entry) > max_chars:
+            excerpts.append(NumberedExcerpt("\n".join(entries), numbered))
+            entries, numbered, size = [], {}, 0
+            if heading and entry != heading:
+                entries.append(heading)
+        entries.append(entry)
+        size += len(entry) + 1
+        if is_change:
+            numbered[number] = content
+    if numbered:
+        excerpts.append(NumberedExcerpt("\n".join(entries), numbered))
+    return excerpts
 
 
 class NoteTerms(BaseModel):
@@ -341,30 +396,61 @@ ANALYSIS_SYSTEM_PROMPT = """You maintain a knowledge base of Stellaris game mech
 read it to correct training data that describes older game versions, so a missing change
 means players get outdated advice.
 
-Read every line of the release-note excerpt, whatever section it is under, and extract
-every change to how the game plays:
-- rules, costs, upkeep, numbers, requirements, eligibility, and who an effect applies to;
-- new or removed features, policies, options, and interactions;
-- AI behavior that changes what players should expect from opponents;
-- "bug fixes" that change a mechanic's actual effect (for example a bonus that now applies,
-  scales differently, or targets different pops).
-Skip only lines that change nothing in play: crash, performance, and stability fixes;
-tooltip, text, naming, UI, and graphics changes; localisation; modding and script fields.
-Be exhaustive. A borderline change should be proposed: a reviewer removes extras, but an
-omission is never noticed.
+The release-note excerpt numbers each change line as L1, L2, and so on. Account for every
+numbered line exactly once: either cite it in a fact's "lines", or list it in
+"skipped_lines". Judge each line by what it changes, not by its section; mechanic changes
+are often listed under "Bugfix".
 
-For each change:
-- Write "fact" as a present-tense statement of how the game works, keeping its scope and
-  conditions (who, which pops, which empires, which DLC). Combine lines about the same
-  mechanic into one fact. Never use change-history words such as "now", "no longer",
-  "used to", "changed", "increased", "decreased", "reduced", or "patch"; state the
-  current value instead.
-- Copy one supporting sentence verbatim from the excerpt into "quote".
-- Choose the best note from the existing notes below. When no note covers the concept,
-  set new_note and give a short concept title (for example "Defense Platforms"), plus
-  related existing note titles.
-- When the change contradicts or replaces an existing fact, set supersedes_label to that
-  fact's bold label."""
+Make a fact for every line that changes how the game plays:
+- rules, costs, upkeep, numbers, requirements, eligibility, and who an effect applies to;
+- new or removed features, buildings, policies, options, and interactions;
+- AI behavior that changes what players should expect from opponents;
+- fixes that change a mechanic's actual effect, such as a bonus that starts applying,
+  scales differently, or targets different pops.
+Skip only lines that change nothing in play: crash, performance, and stability fixes;
+tooltip, text, naming, UI, icon, and graphics changes; localisation; modding and script
+fields. When unsure, make a fact: a reviewer removes extras, but an omission is never
+noticed.
+
+For each fact:
+- "fact" states how the game works in the present tense, with its scope and conditions
+  (who, which pops, which empires, which DLC). Lines about the same mechanic become one
+  fact citing all of them. Never use change-history words such as "now", "no longer",
+  "instead", "used to", "changed", "increased", "decreased", "reduced", or "patch"; state
+  the current value.
+- "label" is a short name of 1-5 words.
+- "note" is the best existing note title from the list below. When none covers the concept,
+  set new_note to true, give a short concept title, and list related existing notes.
+- "supersedes_label" is the bold label of an existing fact that this one contradicts or
+  replaces.
+
+Example (invented game content, for format only):
+Balance
+L1: Defensive Pacts now cost 2 Influence per month instead of 1.
+L2: The Agrarian Idyll civic now only applies its Amenities bonus to Farmer jobs.
+L3: Agrarian Idyll Farmers now produce +1 Unity each.
+Bugfix
+L4: Fixed Ring Worlds ignoring the Habitability of the species that lives there.
+L5: Fixed a crash when opening the Situation Log.
+L6: Fixed a typo in the Gene Clinic tooltip.
+Features
+L7: Added the Orbital Shipyard building, which lets Habitats build ships.
+Modding
+L8: Added the is_ringworld trigger.
+Answer:
+{"facts": [
+ {"lines": [1], "note": "Wars & Diplomacy", "new_note": false, "label": "Defensive Pact Upkeep",
+  "fact": "Each Defensive Pact costs 2 Influence per month.", "supersedes_label": "Defensive Pact Upkeep", "related": []},
+ {"lines": [2, 3], "note": "Civics", "new_note": false, "label": "Agrarian Idyll",
+  "fact": "Agrarian Idyll applies its Amenities bonus only to Farmer jobs, and its Farmers produce +1 Unity each.", "supersedes_label": null, "related": []},
+ {"lines": [4], "note": "Megastructures", "new_note": false, "label": "Ring World Habitability",
+  "fact": "Ring Worlds use the Habitability of the species that lives there.", "supersedes_label": null, "related": []},
+ {"lines": [7], "note": "Habitat Shipyards", "new_note": true, "label": "Orbital Shipyard",
+  "fact": "The Orbital Shipyard building lets Habitats build ships.", "supersedes_label": null, "related": ["Naval Capacity"]}],
+ "skipped_lines": [5, 6, 8]}"""
+
+FOLLOW_UP_PROMPT = """These numbered lines from the same release notes were not accounted for.
+Classify each one: cite it in a fact, or list it in skipped_lines."""
 
 
 TERMS_SYSTEM_PROMPT = """List words Stellaris players use for a game concept, as they would
@@ -397,6 +483,12 @@ def create_generator() -> Any:
         raise SystemExit(
             "Set KNOWLEDGE_PROVIDER to gemini, openrouter, custom, ollama, or lm_studio."
         )
+    if provider == ADVISOR_PROVIDER_GEMINI and not model:
+        # Line numbering, examples, and the coverage follow-up let Flash-Lite keep up, and it
+        # has more free capacity than Flash.
+        from backend.core.model_routing import GEMINI_FLASH_LITE_MODEL
+
+        model = GEMINI_FLASH_LITE_MODEL
     if provider != ADVISOR_PROVIDER_GEMINI and not model:
         raise SystemExit(f"Set KNOWLEDGE_MODEL to a model ID offered by {provider}.")
     config = AdvisorProviderConfig.from_environment(
@@ -479,25 +571,59 @@ def request_json(generator: Any, system: str, user: str, schema: type[BaseModel]
     return _parse_json(result.text, schema)
 
 
+def _cited_lines(facts: list[ProposedFact], known: dict[int, str]) -> list[ProposedFact]:
+    """Keep valid line citations and fill each quote from the cited lines."""
+    cited = []
+    for fact in facts:
+        lines = sorted({number for number in fact.lines if number in known})
+        quote = " / ".join(known[number] for number in lines) or fact.quote
+        cited.append(fact.model_copy(update={"lines": lines, "quote": quote}))
+    return cited
+
+
 def propose_facts(
     generator: Any, release: ReleaseNote, graph: KnowledgeGraph, *, chunk_chars: int
 ) -> tuple[list[ProposedFact], list[str]]:
     proposals: list[ProposedFact] = []
     problems: list[str] = []
     catalog = note_catalog(graph)
-    chunks = split_chunks(release.text, chunk_chars)
-    for index, chunk in enumerate(chunks, start=1):
-        user = (
-            f"Release: Stellaris {release.version} ({release.title})\n"
-            f"Excerpt {index} of {len(chunks)}:\n{chunk}\n\n"
-            f"Existing notes and their current facts:\n\n{catalog}"
-        )
+    excerpts = number_release_lines(release.text, chunk_chars)
+    for index, excerpt in enumerate(excerpts, start=1):
+        header = f"Release: Stellaris {release.version} ({release.title})\n"
+        notes = f"\n\nExisting notes and their current facts:\n\n{catalog}"
         try:
-            analysis = request_json(generator, ANALYSIS_SYSTEM_PROMPT, user, ReleaseAnalysis)
+            analysis = request_json(
+                generator,
+                ANALYSIS_SYSTEM_PROMPT,
+                f"{header}Excerpt {index} of {len(excerpts)}:\n{excerpt.text}{notes}",
+                ReleaseAnalysis,
+            )
+            facts = list(analysis.facts)  # type: ignore[attr-defined]
+            skipped = set(analysis.skipped_lines)  # type: ignore[attr-defined]
+            covered = skipped | {number for fact in facts for number in fact.lines}
+            missing = [number for number in excerpt.lines if number not in covered]
+            if missing:
+                # Weaker models drop lines silently; ask again about exactly those lines.
+                retry = "\n".join(f"L{number}: {excerpt.lines[number]}" for number in missing)
+                follow_up = request_json(
+                    generator,
+                    f"{ANALYSIS_SYSTEM_PROMPT}\n\n{FOLLOW_UP_PROMPT}",
+                    f"{header}{retry}{notes}",
+                    ReleaseAnalysis,
+                )
+                facts.extend(follow_up.facts)  # type: ignore[attr-defined]
+                skipped |= set(follow_up.skipped_lines)  # type: ignore[attr-defined]
+                covered = skipped | {number for fact in facts for number in fact.lines}
+                missing = [number for number in excerpt.lines if number not in covered]
+            if missing:
+                problems.append(
+                    "Lines never classified by the model: "
+                    + ", ".join(f"L{number} ({excerpt.lines[number][:60]})" for number in missing)
+                )
         except (ValidationError, ValueError) as error:
             problems.append(f"Excerpt {index}: unreadable model response ({error})")
             continue
-        proposals.extend(analysis.facts)  # type: ignore[attr-defined]
+        proposals.extend(_cited_lines(facts, excerpt.lines))
     return proposals, problems
 
 
@@ -535,11 +661,12 @@ def review_proposals(
         key = _note_key(proposal.note)
         note = graph.notes.get(key)
         reason = None
-        if (
+        # A quote filled from cited release-note lines is the source text itself.
+        if not proposal.lines and (
             len(proposal.quote.strip()) < MIN_QUOTE_CHARS
             or _normalize(proposal.quote) not in source
         ):
-            reason = "quote not found in the release notes"
+            reason = "cites no release-note line"
         elif not label or len(label) > 60 or not fact:
             reason = "missing or overlong label or fact"
         elif _HISTORY_WORDS.search(f"{label} {fact}"):
@@ -765,7 +892,8 @@ def render_summary(
                 f" (replaces '{proposal.supersedes_label}')" if proposal.supersedes_label else ""
             )
             lines.append(f"- **{proposal.note}** / {proposal.label}{replaced}")
-            lines.append(f'  - Quote: "{proposal.quote.strip()}"')
+            cited = ", ".join(f"L{number}" for number in proposal.lines)
+            lines.append(f'  - Source{f" ({cited})" if cited else ""}: "{proposal.quote.strip()}"')
     if review.rejected:
         lines += ["", f"### Rejected proposals ({len(review.rejected)})"]
         lines += [
