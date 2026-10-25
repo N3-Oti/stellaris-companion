@@ -8,10 +8,12 @@ import pytest
 
 from scripts import knowledge_pipeline as pipeline
 from stellaris_companion.knowledge_graph import (
-    DEFAULT_KNOWLEDGE_DIR,
     load_knowledge_graph,
     resolve_graph_knowledge,
 )
+
+# A frozen 4.5.1-era subset, so these tests hold after the shipped graph learns 4.5.2.
+FIXTURE_GRAPH = Path(__file__).parent / "fixtures" / "knowledge_graph"
 
 RELEASE_TEXT = (
     "[h2]Economy[/h2][list][*]Branch Offices now cost 100 Influence plus 5 Influence per jump."
@@ -128,7 +130,7 @@ TERMS = {
 @pytest.fixture
 def knowledge_copy(tmp_path: Path) -> Path:
     target = tmp_path / "knowledge"
-    shutil.copytree(DEFAULT_KNOWLEDGE_DIR, target)
+    shutil.copytree(FIXTURE_GRAPH, target)
     load_knowledge_graph.cache_clear()
     yield target
     load_knowledge_graph.cache_clear()
@@ -207,7 +209,7 @@ def test_gemini_defaults_to_the_advisor_model(monkeypatch):
 
 
 def test_unreviewed_releases_skip_known_and_pre_graph_versions():
-    graph = load_knowledge_graph(DEFAULT_KNOWLEDGE_DIR)
+    graph = load_knowledge_graph(FIXTURE_GRAPH)
     releases = pipeline.find_stable_releases(NEWS["appnews"]["newsitems"])
 
     assert [release.version for release in pipeline.unreviewed_releases(releases, graph)] == [
@@ -225,7 +227,7 @@ def test_split_chunks_respects_size_limit():
 
 
 def test_review_rejects_unquoted_historical_and_misplaced_facts():
-    graph = load_knowledge_graph(DEFAULT_KNOWLEDGE_DIR)
+    graph = load_knowledge_graph(FIXTURE_GRAPH)
     source = pipeline.clean_bbcode(RELEASE_TEXT)
     proposals = [
         pipeline.ProposedFact(**_proposal()),
