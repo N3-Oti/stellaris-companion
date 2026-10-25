@@ -1,0 +1,45 @@
+name: Steam build probe
+
+# Checks whether anonymous SteamCMD can read Stellaris' public branch build ID, which the
+# knowledge pipeline would use as its release trigger. See docs/knowledge-graph.md.
+on:
+  push:
+    branches: [claude/knowledge-pipeline]
+    paths: ['.github/workflows/steam-build-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install SteamCMD
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -q
+          sudo apt-get install -y -q lib32gcc-s1
+          mkdir -p "$RUNNER_TEMP/steamcmd"
+          curl -sSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/steamcmd"
+
+      - name: Read Stellaris app info anonymously
+        working-directory: ${{ runner.temp }}/steamcmd
+        run: |
+          # The first run updates SteamCMD itself; printing twice works around reported
+          # incomplete first output.
+          ./steamcmd.sh +login anonymous +app_info_update 1 \
+            +app_info_print 281990 +app_info_print 281990 +quit > app_info.txt 2>&1 || true
+          echo "--- output size: $(wc -c < app_info.txt) bytes"
+          grep -n -i -E 'no app info|access token|_missing_token|failed|error' app_info.txt | head -20 || true
+          echo "--- branches"
+          grep -n -A40 '"branches"' app_info.txt | head -80 || echo "No branches section found"
+
+      - name: Keep raw output
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-app-info
+          path: ${{ runner.temp }}/steamcmd/app_info.txt
+          retention-days: 7
