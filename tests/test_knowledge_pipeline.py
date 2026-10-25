@@ -34,6 +34,19 @@ REAL_TITLES = {
     "Stellaris Dev Diary #433 - 4.5 'Cygnus' Preliminary Release Notes": None,
     "Stellaris Dev Diary #427 - We've Had One, Yes. But What About Second Open Beta?": None,
     "Willpower and the Stellaris 4.6 'Corona Borealis' update will be released on Monday": None,
+    "Stellaris 4.3 'Cetus' is now available!": "4.3",
+    "Stellaris 4.3.1 hotfix release (checksum f646)": "4.3.1",
+    "Stellaris 4.3.7 hotfix patch released (checksum 4f3c)": "4.3.7",
+    "Stellaris Patch 4.2.4 released (checksum 7a03)": "4.2.4",
+    "4.2.2 Hotfix now available": "4.2.2",
+    "4.1.7 Patch Released (checksum 6486)": "4.1.7",
+    "Stellaris Dev Diary #434 - 4.5.2 'Cygnus' Tentative Patch Notes": None,
+    "4.3.2 Open Beta is now on stellaris_test [checksum 171a]": None,
+    "[Dev Team] stellaris_test updated with 4.4.2 (checksum 38b9)": None,
+    "v4.1.7 Open Beta released! (checksum ad13)": None,
+    'Stellaris 4.3 "Cetus" Open Beta Updated (2026-03-06)': None,
+    "Stellaris: Nomads is available now!": None,
+    "Mammalian Science Ship Brickset and Bubbles Cantina Puzzle now available!": None,
 }
 
 NEWS = {
@@ -118,6 +131,22 @@ def knowledge_copy(tmp_path: Path) -> Path:
     load_knowledge_graph.cache_clear()
     yield target
     load_knowledge_graph.cache_clear()
+
+
+def test_clean_bbcode_handles_feed_markup():
+    raw = (
+        '[p][img src="{STEAM_CLAN_IMAGE}/1/a.png"][/img][/p][p]Hello![/p]'
+        "[h3][b]4.5.2 Hotfix Release Notes[/b][/h3][list][*][p]Arkships can Detoxify "
+        "worlds.[/p][/*][*][p]Fixed a [redacted] bug.\u200b[/p][/*][/list]"
+        '[dynamiclink href="https://store.steampowered.com/app/1/"][/dynamiclink]'
+    )
+
+    text = pipeline.clean_bbcode(raw)
+
+    assert text == (
+        "Hello!\n\n4.5.2 Hotfix Release Notes\n\n- Arkships can Detoxify worlds.\n\n"
+        "- Fixed a [redacted] bug."
+    )
 
 
 def test_clean_bbcode_keeps_readable_lists_and_headings():

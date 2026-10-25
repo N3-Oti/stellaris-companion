@@ -134,11 +134,16 @@ reviews them as a pull request.
    `feeds=steam_community_announcements` and `maxlength=0` (full post bodies), and lists stable
    release announcements whose version is at or above `min_version` and not yet known to the
    graph (as a fact's `since`, a note's `verified_through`, or `reviewed_releases`).
-   Stable titles start with the version and say it is released, available, or a patch or
-   hotfix: `Stellaris 4.5 "Cygnus" now available!`, `Stellaris 4.5.1 released (checksum 358e)`,
-   `Stellaris 4.4.6 hotfix released (fdde)`, `Stellaris 4.4.5 patch released (2f57)`. Open betas
-   (`Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now available!`), dev diaries, and teasers that
-   mention a version mid-title are skipped.
+   Stable titles start with the version (optionally after "Stellaris" or "Stellaris Patch")
+   and say it is released, available, or a patch or hotfix: `Stellaris 4.5 "Cygnus" now
+   available!`, `Stellaris 4.5.1 released (checksum 358e)`, `Stellaris 4.4.6 hotfix released
+   (fdde)`, `4.2.2 Hotfix now available`. Open betas (`Stellaris 4.4.4 "Pegasus" Open Beta (3bc0)
+   now available!`, `4.3.2 Open Beta is now on stellaris_test`), dev diaries (including
+   "Tentative Patch Notes"), and teasers are skipped. Checked against the feed's 100 most recent
+   announcements (September 2025 to October 2026): all 21 stable releases from 4.1.1 to 4.5.2
+   are found and no beta is. A release line that launches only inside a DLC announcement
+   (4.4 arrived as `Stellaris: Nomads is available now!`) has no version in its title; the
+   report then asks for its main notes when the line's first hotfix is processed.
 2. **Propose facts.** `update` splits the release notes into excerpts and sends each with a catalog of note titles and current fact labels. The model
    returns structured proposals: target note, label, present-tense fact, a verbatim quote, and an
    optional label of the fact it supersedes.

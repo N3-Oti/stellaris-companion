@@ -56,20 +56,33 @@ MIN_QUOTE_CHARS = 20
 
 # Stable announcements on the Steam feed start with the version, for example:
 #   Stellaris 4.5 "Cygnus" now available!          (release line)
+#   Stellaris 4.3 'Cetus' is now available!
 #   Stellaris 4.5.1 released (checksum 358e)        (hotfix)
-#   Stellaris 4.5.2 released [checksum 9776]
 #   Stellaris 4.4.6 hotfix released (fdde)
-#   Stellaris 4.4.5 patch released (2f57)
-#   Stellaris 4.0.10 Patch
-# Open betas use the same shape ("Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now
-# available!", "Stellaris 4.5 'Cygnus' Open Beta Update 4 (e6fd)"), and dev diaries or
-# teasers mention versions mid-title ("Willpower and the Stellaris 4.6 ... will be
-# released"), so a title must start with the version and carry no beta marker.
-_TITLE_VERSION_PATTERN = re.compile(r"^\s*Stellaris\s+v?(\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
-_RELEASE_WORDS = re.compile(r"\b(released|now available|now live|patch|hotfix)\b", re.IGNORECASE)
-_BETA_WORDS = re.compile(
-    r"\b(beta|preview|preliminary|dev diary|will be|coming|upcoming)\b", re.IGNORECASE
+#   Stellaris 4.3.1 hotfix release (checksum f646)
+#   Stellaris Patch 4.2.4 released (checksum 7a03)
+#   4.2.2 Hotfix now available
+#   4.1.7 Patch Released (checksum 6486)
+# Open betas share these shapes ("Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now
+# available!", "4.3.2 Open Beta is now on stellaris_test [checksum 171a]"), and dev
+# diaries or teasers mention versions mid-title ("Dev Diary #434 - 4.5.2 'Cygnus'
+# Tentative Patch Notes"), so a title must start with the version and carry no beta marker.
+# Some release lines launch only inside a DLC announcement without a version in the title
+# ("Stellaris: Nomads is available now!" for 4.4); those cannot be detected here.
+_TITLE_VERSION_PATTERN = re.compile(
+    r"^\s*(?:Stellaris\s+)?(?:Patch\s+)?v?(\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE
 )
+_RELEASE_WORDS = re.compile(
+    r"\b(released|release|now available|available now|now live|patch|hotfix)\b", re.IGNORECASE
+)
+_BETA_WORDS = re.compile(
+    r"\b(beta|preview|preliminary|tentative|dev diary|will be|coming|upcoming)\b"
+    r"|stellaris_test",
+    re.IGNORECASE,
+)
+# Tags seen on the Stellaris feed. Unknown bracketed words such as "[redacted]" are text.
+_BLOCK_TAGS = r"p|list|olist|table|tr|quote|hr|br|h[1-6]"
+_INLINE_TAGS = r"b|i|u|c|strike|code|spoiler|noparse|td|th|url|\*"
 # Some Steam posts only summarize and link to the full notes on the Paradox forum.
 FORUM_ONLY_HINT_CHARS = 2000
 # Model-facing facts are present tense; change history confuses models and players.
@@ -133,14 +146,22 @@ class Review:
 
 def clean_bbcode(text: str) -> str:
     """Convert Steam announcement BBCode into plain Markdown-like text."""
+    flags = re.DOTALL | re.IGNORECASE
+    text = text.replace("\u200b", "")
+    text = re.sub(r"\[img[^\]]*\].*?\[/img\]", "", text, flags=flags)
+    text = re.sub(
+        r"\[(previewyoutube|dynamiclink|video)\b[^\]]*\](?:.*?\[/\1\])?", "", text, flags=flags
+    )
     text = re.sub(r"\{STEAM_CLAN_IMAGE\}\S*", "", text)
-    text = re.sub(r"\[url=[^\]]*\](.*?)\[/url\]", r"\1", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"\[h[1-6]\](.*?)\[/h[1-6]\]", r"\n\n\1\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"\[url=[^\]]*\](.*?)\[/url\]", r"\1", text, flags=flags)
+    text = re.sub(r"\[h[1-6]\](.*?)\[/h[1-6]\]", r"\n\n\1\n", text, flags=flags)
     text = re.sub(r"\[\*\]", "\n- ", text)
-    text = re.sub(r"\[/?[a-z0-9]+(?:=[^\]]*)?\]", "", text, flags=re.IGNORECASE)
+    text = re.sub(rf"\[/?(?:{_BLOCK_TAGS})\b[^\]]*\]", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(rf"\[/?(?:{_INLINE_TAGS})(?:=[^\]]*)?\]", "", text, flags=re.IGNORECASE)
     text = html.unescape(text)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    text = re.sub(r"(?m)^- *\n+(?=\S)", "- ", "\n".join(lines))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def find_stable_releases(items: list[dict[str, Any]]) -> list[ReleaseNote]:
@@ -583,6 +604,12 @@ def render_summary(
             f"- [ ] {key[0]}.{key[1]} is a new release line: decide whether it redesigns "
             "mechanics enough to add it to `breaking_lines` in `_manifest.md`."
         )
+        if key[2] > 0:
+            lines.append(
+                f"- [ ] No versioned Steam post was found for {key[0]}.{key[1]} itself (release "
+                "lines can launch inside a DLC announcement); add its main release notes from "
+                "the Paradox forum before relying on this hotfix alone."
+            )
     if len(release.text) < FORUM_ONLY_HINT_CHARS or "forum" in release.text.lower():
         lines.append(
             "- [ ] The Steam post is short or points to the Paradox forum; compare the full "
