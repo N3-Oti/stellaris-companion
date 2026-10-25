@@ -159,9 +159,16 @@ reviews them as a pull request.
    are found and no beta is. A release line that launches only inside a DLC announcement
    (4.4 arrived as `Stellaris: Nomads is available now!`) has no version in its title; the
    report then asks for its main notes when the line's first hotfix is processed.
-3. **Propose facts.** `update` splits the release notes into excerpts and sends each with a catalog of note titles and current fact labels. The model
-   returns structured proposals: target note, label, present-tense fact, a verbatim quote, and an
-   optional label of the fact it supersedes.
+3. **Propose facts.** `update` sends the release notes (split only above 24,000 characters,
+   so a typical hotfix goes in one request) together with every note and the full text of
+   its current facts. The prompt asks for every change to how the game plays, whatever
+   section it is listed under (mechanic changes often appear under "Bugfix"), keeping scope
+   and conditions, and prefers proposing a borderline change over omitting one. The model
+   returns structured proposals: target note or a new concept, label, present-tense fact, a
+   verbatim quote, and the label of any fact it supersedes. The configured model is pinned on
+   every request and reported in the summary, the provider's default temperature is kept
+   (Gemini 3 is tuned for 1.0), and responses may use up to 8,192 output tokens where the
+   endpoint allows. Small local models may struggle with the roughly 12,000-token requests.
 4. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
    change-history wording, it names an unknown note without asking for a new one, or the fact it
    claims to supersede does not exist. New notes get terms for every locale from a second request

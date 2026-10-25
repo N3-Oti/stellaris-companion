@@ -53,7 +53,9 @@ from stellaris_companion.knowledge_graph import (  # noqa: E402
 STEAM_APP_ID = 281990
 STEAM_NEWS_URL = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
 PLAYER_LOCALES = ("en", "ja", "zh-Hans", "de", "fr", "es", "pt-BR")
-DEFAULT_CHUNK_CHARS = 12000
+# A typical hotfix (about 15,000 characters) fits in one request, which keeps related
+# lines together; large release-line notes are split.
+DEFAULT_CHUNK_CHARS = 24000
 MIN_QUOTE_CHARS = 20
 
 # Stable announcements on the Steam feed start with the version, for example:
@@ -122,7 +124,9 @@ class ProposedFact(BaseModel):
     note: str = Field(description="Existing note title, or the title of a new note.")
     new_note: bool = Field(description="True only when no existing note fits.")
     label: str = Field(description="Short bold label, 1-5 words.")
-    fact: str = Field(description="Present-tense mechanic, without the label.")
+    fact: str = Field(
+        description="Present-tense mechanic with its scope and conditions, without the label."
+    )
     supersedes_label: str | None = Field(
         default=None, description="Label of the existing fact in the note this replaces."
     )
@@ -324,26 +328,42 @@ def split_chunks(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> list[str]:
 
 
 def note_catalog(graph: KnowledgeGraph) -> str:
-    lines = []
+    """Every note with the full text of its current facts, for placement and supersession."""
+    sections = []
     for note in sorted(graph.notes.values(), key=lambda item: item.title):
-        current = [fact.label for fact in note.facts if fact.until is None and fact.label]
-        lines.append(f"- {note.title}: {', '.join(current) or '(no labeled facts)'}")
-    return "\n".join(lines)
+        current = [fact.text for fact in note.facts if fact.until is None]
+        sections.append("\n".join([f"## {note.title}", *current]))
+    return "\n\n".join(sections)
 
 
-ANALYSIS_SYSTEM_PROMPT = """You maintain a knowledge base of Stellaris game mechanics used to
-correct AI advisors whose training data describes older game versions.
+ANALYSIS_SYSTEM_PROMPT = """You maintain a knowledge base of Stellaris game mechanics. AI advisors
+read it to correct training data that describes older game versions, so a missing change
+means players get outdated advice.
 
-From the release-note excerpt, extract only changes that alter strategic advice:
-- Include system-level rules, costs, requirements, and numbers players plan around.
-- Skip bug fixes, crash or performance fixes, UI and tooltip changes, localisation,
-  modding fields, achievements, and cosmetic content.
-Write each fact as a present-tense statement of how the game works now. Never use change
-history ("now", "no longer", "used to", "was changed", "increased", "patch").
-Copy one supporting sentence verbatim from the excerpt into "quote".
-Put each fact in the best existing note from the catalog. Set new_note only when no note
-fits. When a fact replaces an existing labeled fact, give that label in supersedes_label.
-Return an empty list when nothing qualifies."""
+Read every line of the release-note excerpt, whatever section it is under, and extract
+every change to how the game plays:
+- rules, costs, upkeep, numbers, requirements, eligibility, and who an effect applies to;
+- new or removed features, policies, options, and interactions;
+- AI behavior that changes what players should expect from opponents;
+- "bug fixes" that change a mechanic's actual effect (for example a bonus that now applies,
+  scales differently, or targets different pops).
+Skip only lines that change nothing in play: crash, performance, and stability fixes;
+tooltip, text, naming, UI, and graphics changes; localisation; modding and script fields.
+Be exhaustive. A borderline change should be proposed: a reviewer removes extras, but an
+omission is never noticed.
+
+For each change:
+- Write "fact" as a present-tense statement of how the game works, keeping its scope and
+  conditions (who, which pops, which empires, which DLC). Combine lines about the same
+  mechanic into one fact. Never use change-history words such as "now", "no longer",
+  "used to", "changed", "increased", "decreased", "reduced", or "patch"; state the
+  current value instead.
+- Copy one supporting sentence verbatim from the excerpt into "quote".
+- Choose the best note from the existing notes below. When no note covers the concept,
+  set new_note and give a short concept title (for example "Defense Platforms"), plus
+  related existing note titles.
+- When the change contradicts or replaces an existing fact, set supersedes_label to that
+  fact's bold label."""
 
 
 TERMS_SYSTEM_PROMPT = """List words Stellaris players use for a game concept, as they would
@@ -429,8 +449,10 @@ def request_json(generator: Any, system: str, user: str, schema: type[BaseModel]
     result = generator.generate(
         system_prompt=system,
         user_prompt=user,
-        temperature=0.2,
-        max_output_tokens=4096,
+        # Gemini 3 models are tuned for the default temperature of 1.0; lower values can
+        # degrade reasoning. Exhaustive extraction can need a long response; adapters cap
+        # this at what each endpoint supports.
+        max_output_tokens=8192,
         response_schema=schema,
         schema_name=schema.__name__,
     )
@@ -448,7 +470,7 @@ def propose_facts(
         user = (
             f"Release: Stellaris {release.version} ({release.title})\n"
             f"Excerpt {index} of {len(chunks)}:\n{chunk}\n\n"
-            f"Existing notes and their current fact labels:\n{catalog}"
+            f"Existing notes and their current facts:\n\n{catalog}"
         )
         try:
             analysis = request_json(generator, ANALYSIS_SYSTEM_PROMPT, user, ReleaseAnalysis)
