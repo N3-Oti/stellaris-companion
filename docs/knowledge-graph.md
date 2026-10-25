@@ -130,7 +130,22 @@ when an older release line is added to the graph.
 `scripts/knowledge_pipeline.py` drafts graph changes for new stable releases; a maintainer
 reviews them as a pull request.
 
-1. **Find releases.** `check` calls Steam's `ISteamNews/GetNewsForApp/v2` for app 281990 with
+1. **Detect a release.** The trigger is Stellaris' public branch build on Steam, read with
+   anonymous SteamCMD (`+login anonymous +app_info_update 1 +app_info_print 281990`): the
+   `branches.public` entry gives `buildid` and `timeupdated` (when it went live), while betas
+   sit on separate branches such as `stellaris_test`. While the build matches
+   `steam_public_build` in `_manifest.md`, nothing else runs. Across 50 public builds from May
+   2025 to October 2026, every stable release post appeared within 5.1 hours of its build going
+   live (median 1 hour), and 15 builds had no release post at all. So after a build changes:
+   - a versioned release post is processed as below;
+   - an unversioned launch post (such as `Stellaris: Nomads is available now!`, which carried
+     4.4.1) within 6 hours before to 24 hours after the build raises a warning, for 72 hours,
+     that a release line may have launched and needs its notes added by hand;
+   - with no post, the next daily run checks again, and after 24 hours the build is treated as
+     an unannounced update.
+   The build is recorded by the release's pull request once no older release is pending, so
+   unannounced builds and backlogs never block a later release.
+2. **Find release posts.** `check` calls Steam's `ISteamNews/GetNewsForApp/v2` for app 281990 with
    `feeds=steam_community_announcements` and `maxlength=0` (full post bodies), and lists stable
    release announcements whose version is at or above `min_version` and not yet known to the
    graph (as a fact's `since`, a note's `verified_through`, or `reviewed_releases`).
@@ -144,18 +159,18 @@ reviews them as a pull request.
    are found and no beta is. A release line that launches only inside a DLC announcement
    (4.4 arrived as `Stellaris: Nomads is available now!`) has no version in its title; the
    report then asks for its main notes when the line's first hotfix is processed.
-2. **Propose facts.** `update` splits the release notes into excerpts and sends each with a catalog of note titles and current fact labels. The model
+3. **Propose facts.** `update` splits the release notes into excerpts and sends each with a catalog of note titles and current fact labels. The model
    returns structured proposals: target note, label, present-tense fact, a verbatim quote, and an
    optional label of the fact it supersedes.
-3. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
+4. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
    change-history wording, it names an unknown note without asking for a new one, or the fact it
    claims to supersede does not exist. New notes get terms for every locale from a second request
    and are rejected without them.
-4. **Edit.** Accepted facts are added with `{since: <release>}` before the note's `Related:` line.
+5. **Edit.** Accepted facts are added with `{since: <release>}` before the note's `Related:` line.
    A superseded fact, or a current fact with the same label, is closed with `until`. The release is
    appended to `reviewed_releases`, even when nothing changed, so it is not proposed again.
    `verified_through` is never raised by the pipeline.
-5. **Report.** A summary lists accepted facts with their quotes, rejected proposals with reasons,
+6. **Report.** A summary lists accepted facts with their quotes, rejected proposals with reasons,
    and anything needing attention, such as a new release line that may belong in `breaking_lines`,
    or a short Steam post whose full notes are only on the Paradox forum (not fetched).
 

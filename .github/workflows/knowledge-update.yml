@@ -35,9 +35,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pytest
 
+      # The public branch build ID is the release trigger; news is read only after it changes.
+      - name: Read Stellaris public build
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -q
+          sudo apt-get install -y -q lib32gcc-s1
+          mkdir -p "$RUNNER_TEMP/steamcmd"
+          curl -sSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/steamcmd"
+          "$RUNNER_TEMP/steamcmd/steamcmd.sh" +login anonymous +app_info_update 1 \
+            +app_info_print 281990 +app_info_print 281990 +quit > "$RUNNER_TEMP/app_info.txt" 2>&1 || true
+
       - name: Find an unreviewed stable release
         id: check
-        run: python scripts/knowledge_pipeline.py check
+        run: python scripts/knowledge_pipeline.py --app-info "$RUNNER_TEMP/app_info.txt" check
+
+      - name: Report a release without a versioned post
+        if: steps.check.outputs.notice != ''
+        env:
+          NOTICE: ${{ steps.check.outputs.notice }}
+        run: |
+          echo "::warning title=Knowledge update::$NOTICE"
+          echo "$NOTICE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Choose release
         id: release
@@ -72,7 +92,8 @@ jobs:
           KNOWLEDGE_API_KEY: ${{ secrets.KNOWLEDGE_API_KEY }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          python scripts/knowledge_pipeline.py update --version "$VERSION" --summary "$RUNNER_TEMP/summary.md"
+          python scripts/knowledge_pipeline.py --app-info "$RUNNER_TEMP/app_info.txt" \
+            update --version "$VERSION" --summary "$RUNNER_TEMP/summary.md"
 
       - name: Check graph
         if: steps.draft.outcome == 'success'

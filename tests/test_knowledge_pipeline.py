@@ -1,5 +1,6 @@
 import json
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -320,4 +321,150 @@ def test_reviewed_release_is_not_proposed_again(knowledge_copy: Path, tmp_path: 
         ]
     )
 
-    assert output.read_text(encoding="utf-8") == "version=\n"
+    assert output.read_text(encoding="utf-8") == "version=\nnotice=\n"
+
+
+# Shape of `steamcmd +app_info_print 281990` (values from the 6 October 2026 public build).
+APP_INFO = """
+"281990"
+{
+	"depots"
+	{
+		"branches"
+		{
+			"public"
+			{
+				"buildid"		"25664273"
+				"timeupdated"		"1791277234"
+				"timebuildupdated"		"1790894566"
+			}
+			"stellaris_test"
+			{
+				"buildid"		"25482991"
+				"description"		"Open Beta"
+				"timeupdated"		"1790176101"
+			}
+		}
+	}
+}
+"""
+
+
+def _write_app_info(tmp_path: Path) -> Path:
+    path = tmp_path / "app_info.txt"
+    path.write_text(APP_INFO, encoding="utf-8")
+    return path
+
+
+def _check(knowledge_dir: Path, tmp_path: Path, news: dict | None) -> dict[str, str]:
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    argv = ["--knowledge-dir", str(knowledge_dir), "--app-info", str(_write_app_info(tmp_path))]
+    if news is not None:
+        news_file = tmp_path / "news.json"
+        news_file.write_text(json.dumps(news), encoding="utf-8")
+        argv += ["--news-file", str(news_file)]
+    pipeline.main([*argv, "check", "--github-output", str(output)])
+    lines = output.read_text(encoding="utf-8").splitlines()
+    return dict(line.split("=", 1) for line in lines)
+
+
+def test_parse_public_build_ignores_beta_branches():
+    build = pipeline.parse_public_build(APP_INFO)
+
+    assert build == pipeline.PublicBuild(
+        "25664273", datetime(2026, 10, 6, 9, 0, 34, tzinfo=timezone.utc)
+    )
+    assert pipeline.parse_public_build("no branches here") is None
+
+
+def test_unchanged_public_build_skips_the_news_feed(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch
+):
+    pipeline.record_public_build(knowledge_copy, "25664273")
+
+    def fail(*_: object) -> None:
+        raise AssertionError("news must not be fetched")
+
+    monkeypatch.setattr(pipeline, "fetch_news", fail)
+
+    outputs = _check(knowledge_copy, tmp_path, news=None)
+
+    assert outputs == {"version": "", "notice": "", "build_id": "25664273"}
+
+
+def test_changed_public_build_finds_the_release_post(knowledge_copy: Path, tmp_path: Path):
+    outputs = _check(knowledge_copy, tmp_path, NEWS)
+
+    assert outputs["version"] == "4.5.2"
+    assert outputs["build_id"] == "25664273"
+
+
+def test_launch_post_without_version_raises_a_notice(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch
+):
+    went_live = datetime(2026, 10, 6, 9, 0, 34, tzinfo=timezone.utc)
+    monkeypatch.setattr(pipeline, "_now", lambda: went_live + timedelta(hours=30))
+    launch = {
+        "title": "Stellaris: Willpower is available now!",
+        "url": "https://x/launch",
+        "contents": "",
+        "date": int((went_live + timedelta(minutes=20)).timestamp()),
+    }
+
+    outputs = _check(knowledge_copy, tmp_path, {"appnews": {"newsitems": [launch]}})
+
+    assert outputs["version"] == ""
+    assert "Stellaris: Willpower is available now!" in outputs["notice"]
+    assert "release line may have launched" in outputs["notice"]
+
+
+def test_build_without_any_post_stays_quiet(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch, capsys
+):
+    went_live = datetime(2026, 10, 6, 9, 0, 34, tzinfo=timezone.utc)
+    monkeypatch.setattr(pipeline, "_now", lambda: went_live + timedelta(hours=2))
+
+    outputs = _check(knowledge_copy, tmp_path, {"appnews": {"newsitems": []}})
+
+    assert outputs["notice"] == ""
+    assert "next run checks again" in capsys.readouterr().out
+
+
+def test_update_records_the_build_once_nothing_else_is_pending(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch
+):
+    news = {"appnews": {"newsitems": [*NEWS["appnews"]["newsitems"]]}}
+    news["appnews"]["newsitems"].append(
+        {
+            "title": "Stellaris 4.5.3 released [checksum 0000]",
+            "url": "https://x/453",
+            "contents": RELEASE_TEXT,
+            "date": 40,
+        }
+    )
+    news_file = tmp_path / "news.json"
+    news_file.write_text(json.dumps(news), encoding="utf-8")
+    app_info = _write_app_info(tmp_path)
+    monkeypatch.setattr(pipeline, "create_generator", lambda: FakeGenerator([{"facts": []}] * 2))
+
+    def update(version: str) -> None:
+        pipeline.main(
+            [
+                "--knowledge-dir",
+                str(knowledge_copy),
+                "--news-file",
+                str(news_file),
+                "--app-info",
+                str(app_info),
+                "update",
+                "--version",
+                version,
+            ]
+        )
+        load_knowledge_graph.cache_clear()
+
+    update("4.5.2")
+    assert pipeline.recorded_public_build(knowledge_copy) is None
+    update("4.5.3")
+    assert pipeline.recorded_public_build(knowledge_copy) == "25664273"

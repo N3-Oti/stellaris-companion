@@ -2,6 +2,7 @@
 
 Commands:
     check   List stable releases on the Steam news feed that the graph has not reviewed.
+            With --app-info, skip everything while Stellaris' public build is unchanged.
     update  Draft graph changes for one release with any supported model provider.
 
 The model only proposes facts. Each proposal must quote its source sentence, which is
@@ -32,6 +33,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,13 @@ _BETA_WORDS = re.compile(
 # Tags seen on the Stellaris feed. Unknown bracketed words such as "[redacted]" are text.
 _BLOCK_TAGS = r"p|list|olist|table|tr|quote|hr|br|h[1-6]"
 _INLINE_TAGS = r"b|i|u|c|strike|code|spoiler|noparse|td|th|url|\*"
+# Release trigger: the public branch build ID from anonymous SteamCMD app info. Across 50
+# public builds from May 2025 to October 2026, every stable release post appeared within
+# 5.1 hours after its build went live (median 1 hour); 15 builds had no release post.
+POST_BEFORE_BUILD = timedelta(hours=6)
+RELEASE_POST_WINDOW = timedelta(hours=24)
+LAUNCH_NOTICE_WINDOW = timedelta(hours=72)
+_LAUNCH_WORDS = re.compile(r"\b(available now|is available|now available|out now)\b", re.IGNORECASE)
 # Some Steam posts only summarize and link to the full notes on the Paradox forum.
 FORUM_ONLY_HINT_CHARS = 2000
 # Model-facing facts are present tense; change history confuses models and players.
@@ -92,6 +101,12 @@ _HISTORY_WORDS = re.compile(
     r"hotfix(?:es)?)\b",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class PublicBuild:
+    build_id: str
+    went_live: datetime
 
 
 @dataclass(frozen=True)
@@ -228,6 +243,61 @@ def unreviewed_releases(releases: list[ReleaseNote], graph: KnowledgeGraph) -> l
         and key >= minimum
         and key not in known
     ]
+
+
+def parse_public_build(app_info: str) -> PublicBuild | None:
+    """Read the public branch build ID and go-live time from `app_info_print` output."""
+    match = re.search(r'"branches"\s*\{\s*"public"\s*\{([^{}]*)\}', app_info)
+    if not match:
+        return None
+    build_id = re.search(r'"buildid"\s+"(\d+)"', match.group(1))
+    went_live = re.search(r'"timeupdated"\s+"(\d+)"', match.group(1))
+    if not build_id or not went_live:
+        return None
+    return PublicBuild(
+        build_id.group(1), datetime.fromtimestamp(int(went_live.group(1)), timezone.utc)
+    )
+
+
+def recorded_public_build(knowledge_dir: Path) -> str | None:
+    match = re.search(
+        r"(?m)^steam_public_build: (\d+)$",
+        (knowledge_dir / "_manifest.md").read_text(encoding="utf-8"),
+    )
+    return match.group(1) if match else None
+
+
+def record_public_build(knowledge_dir: Path, build_id: str) -> None:
+    path = knowledge_dir / "_manifest.md"
+    text = path.read_text(encoding="utf-8")
+    line = f"steam_public_build: {build_id}"
+    if re.search(r"(?m)^steam_public_build: \d+$", text):
+        text = re.sub(r"(?m)^steam_public_build: \d+$", line, text, count=1)
+    else:
+        text = text.replace("\n---\n", f"\n{line}\n---\n", 1)
+    path.write_text(text, encoding="utf-8")
+
+
+def launch_posts_near(items: list[dict[str, Any]], build: PublicBuild) -> list[str]:
+    """Unversioned launch announcements around a build, such as a DLC release post."""
+    start = build.went_live - POST_BEFORE_BUILD
+    end = build.went_live + RELEASE_POST_WINDOW
+    titles = []
+    for item in items:
+        posted = datetime.fromtimestamp(int(item.get("date") or 0), timezone.utc)
+        title = str(item.get("title") or "")
+        if (
+            start <= posted <= end
+            and _LAUNCH_WORDS.search(title)
+            and not _TITLE_VERSION_PATTERN.match(title)
+            and not _BETA_WORDS.search(title)
+        ):
+            titles.append(title)
+    return titles
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def split_chunks(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> list[str]:
@@ -645,19 +715,57 @@ def _write_github_output(path: str | None, values: dict[str, str]) -> None:
         return
     with open(path, "a", encoding="utf-8") as handle:
         for key, value in values.items():
-            handle.write(f"{key}={value}\n")
+            handle.write(f"{key}={' '.join(value.split())}\n")
+
+
+def _read_public_build(app_info: Path | None) -> PublicBuild | None:
+    if app_info is None:
+        return None
+    build = parse_public_build(app_info.read_text(encoding="utf-8", errors="replace"))
+    if build is None:
+        print("::warning::Could not read the public branch build; checking news titles only.")
+    return build
 
 
 def command_check(args: argparse.Namespace) -> int:
     graph = load_knowledge_graph(args.knowledge_dir)
     if graph is None:
         raise SystemExit(f"No knowledge graph at {args.knowledge_dir}")
-    pending = unreviewed_releases(find_stable_releases(load_news(args.news_file)), graph)
+    outputs = {"version": "", "notice": ""}
+    build = _read_public_build(args.app_info)
+    if build is not None:
+        outputs["build_id"] = build.build_id
+        if build.build_id == recorded_public_build(args.knowledge_dir):
+            print(f"Public build {build.build_id} is unchanged; nothing to check.")
+            _write_github_output(args.github_output, outputs)
+            return 0
+        print(f"Public build {build.build_id} went live at {build.went_live:%Y-%m-%d %H:%M} UTC.")
+
+    items = load_news(args.news_file)
+    pending = unreviewed_releases(find_stable_releases(items), graph)
     for release in pending:
         print(f"{release.version}\t{release.title}\t{release.url}")
-    if not pending:
+    if pending:
+        outputs["version"] = pending[0].version
+    else:
         print("No unreviewed stable releases.")
-    _write_github_output(args.github_output, {"version": pending[0].version if pending else ""})
+        if build is not None:
+            age = _now() - build.went_live
+            launches = launch_posts_near(items, build)
+            if launches and age <= LAUNCH_NOTICE_WINDOW:
+                outputs["notice"] = (
+                    f"Public build {build.build_id} went live at "
+                    f"{build.went_live:%Y-%m-%d %H:%M} UTC alongside {'; '.join(launches)} "
+                    "without a versioned release post. A release line may have launched "
+                    "inside that announcement; add its release notes from the Paradox forum."
+                )
+            elif age < RELEASE_POST_WINDOW:
+                print("No release post yet; the next run checks again.")
+            else:
+                print("The build has no release post; treating it as an unannounced update.")
+    if outputs["notice"]:
+        print(outputs["notice"])
+    _write_github_output(args.github_output, outputs)
     return 0
 
 
@@ -666,13 +774,17 @@ def command_update(args: argparse.Namespace) -> int:
     graph = load_knowledge_graph(knowledge_dir)
     if graph is None:
         raise SystemExit(f"No knowledge graph at {knowledge_dir}")
-    releases = unreviewed_releases(find_stable_releases(load_news(args.news_file)), graph)
-    if args.version:
-        releases = [release for release in releases if release.version == args.version]
+    pending = unreviewed_releases(find_stable_releases(load_news(args.news_file)), graph)
+    releases = (
+        [release for release in pending if release.version == args.version]
+        if args.version
+        else pending
+    )
     if not releases:
         print("No matching unreviewed stable release.")
         return 0
     release = releases[0]
+    build = _read_public_build(args.app_info)
     generator = create_generator()
     try:
         proposals, problems = propose_facts(generator, release, graph, chunk_chars=args.chunk_chars)
@@ -688,6 +800,10 @@ def command_update(args: argparse.Namespace) -> int:
                 terms_for=lambda title, facts: request_terms(generator, title, facts),
             )
             record_reviewed_release(knowledge_dir, release.version)
+            # Record the build only once nothing older is pending, so a backlog still
+            # gets processed on the following runs.
+            if build is not None and all(item.version == release.version for item in pending):
+                record_public_build(knowledge_dir, build.build_id)
             load_knowledge_graph.cache_clear()
             updated = load_knowledge_graph(knowledge_dir)
             problems += integrity_problems(updated) if updated else ["Graph failed to load"]
@@ -705,6 +821,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--knowledge-dir", type=Path, default=DEFAULT_KNOWLEDGE_DIR)
     parser.add_argument(
         "--news-file", type=Path, help="Saved Steam news JSON instead of fetching the feed."
+    )
+    parser.add_argument(
+        "--app-info",
+        type=Path,
+        help="SteamCMD `app_info_print 281990` output; gates checks on the public build ID.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="List unreviewed stable releases.")
