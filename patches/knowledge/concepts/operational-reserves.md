@@ -29,4 +29,6 @@ verified_through: 4.4.6
 
 - **Operational Reserves:** When a Nomad empire's Operational Reserves are critical, ships and cloned space fauna with a Mineral cost cannot be built. {since: 4.5}
 
+- **Conserve Approach:** The Conserve approach for Operational Reserves grants -50% Specialist Job Efficiency. {since: 4.5.2}
+
 Related: [[Arkships]], [[Logistic Ships]]

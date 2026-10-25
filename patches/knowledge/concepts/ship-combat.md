@@ -21,4 +21,6 @@ verified_through: 4.4.6
 
 - **Combat Disengagement:** Ships do not automatically disengage merely because they have not participated in combat for 15 days. {since: 4.5.1}
 
+- **Armor Upkeep:** Armor costs the same energy and alloy upkeep as a shield of the same tier. {since: 4.5.2}
+
 Related: [[Fleet Doctrine & Ship Design]], [[Naval Capacity]], [[Starbases & Defenses]]

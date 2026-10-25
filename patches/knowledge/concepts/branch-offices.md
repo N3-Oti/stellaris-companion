@@ -17,4 +17,6 @@ verified_through: 4.4.6
 
 - **Branch Offices:** Building a Branch Office costs 75 Influence plus a distance penalty of 5 Influence per jump. {since: 4.5}
 
+- **Franchising Subjugation:** The Franchising civic ignores Opinion, Trust, and Embassy requirements when proposing Subjugation. {since: 4.5.2}
+
 Related: [[Trade]], [[Trade Policy]]

@@ -1,7 +1,8 @@
 ---
 min_version: 4.4.6
 breaking_lines: [4.5]
-reviewed_releases: [4.4.6, 4.5, 4.5.1]
+reviewed_releases: [4.4.6, 4.5, 4.5.1, 4.5.2]
+steam_public_build: 25664273
 ---
 # Mechanics Knowledge Graph
 
