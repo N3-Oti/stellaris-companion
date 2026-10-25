@@ -454,7 +454,7 @@ class ModelRecorder:
                 # The app deliberately makes one attempt; a daily job can wait out a spike.
                 if delay is None or getattr(error, "code", None) not in TRANSIENT_PROVIDER_CODES:
                     raise
-                print(f"::warning::{error} Retrying in {delay} seconds.")
+                print(f"::warning::{error} Retrying in {delay} seconds.", flush=True)
                 _sleep(delay)
         served = getattr(result, "model", None)
         if served and served not in self.served_models:
