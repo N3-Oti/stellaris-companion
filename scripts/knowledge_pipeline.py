@@ -399,6 +399,32 @@ def create_generator() -> Any:
     return generator
 
 
+class ModelRecorder:
+    """Pin the configured model and record which models actually answered.
+
+    Without an explicit model, the Gemini adapter follows the Advisor's routing and would
+    pick its Flash-Lite models instead of the configured one.
+    """
+
+    def __init__(self, generator: Any):
+        self._generator = generator
+        self.served_models: list[str] = []
+
+    @property
+    def config(self) -> Any:
+        return getattr(self._generator, "config", None)
+
+    def generate(self, **kwargs: Any) -> Any:
+        result = self._generator.generate(model=getattr(self.config, "model", "") or None, **kwargs)
+        served = getattr(result, "model", None)
+        if served and served not in self.served_models:
+            self.served_models.append(served)
+        return result
+
+    def close(self) -> None:
+        self._generator.close()
+
+
 def request_json(generator: Any, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
     result = generator.generate(
         system_prompt=system,
@@ -652,11 +678,14 @@ def render_summary(
     changed: list[str],
     problems: list[str],
     graph: KnowledgeGraph,
+    *,
+    models: list[str] | None = None,
 ) -> str:
     lines = [
         f"## Mechanics knowledge update: Stellaris {release.version}",
         "",
         f"Source: [{release.title}]({release.url})",
+        f"Model: {', '.join(models) if models else 'not reported'}",
         "",
         "Drafted by `scripts/knowledge_pipeline.py`. Every accepted fact quotes a sentence that",
         "was found in the release notes. `verified_through` was not raised, so these facts are",
@@ -787,7 +816,7 @@ def command_update(args: argparse.Namespace) -> int:
     build = _read_public_build(args.app_info)
     from backend.core.advisor_providers import AdvisorProviderError
 
-    generator = create_generator()
+    generator = ModelRecorder(create_generator())
     try:
         proposals, problems = propose_facts(generator, release, graph, chunk_chars=args.chunk_chars)
         review = review_proposals(proposals, release.text, graph)
@@ -815,7 +844,9 @@ def command_update(args: argparse.Namespace) -> int:
         return 1
     finally:
         generator.close()
-    summary = render_summary(release, review, changed, problems, graph)
+    summary = render_summary(
+        release, review, changed, problems, graph, models=generator.served_models
+    )
     if args.summary:
         args.summary.write_text(summary, encoding="utf-8")
     print(summary)

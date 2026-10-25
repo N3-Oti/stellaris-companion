@@ -497,3 +497,36 @@ def test_provider_failure_is_reported_in_one_line(
     assert "reviewed_releases: [4.4.6, 4.5, 4.5.1]\n" in (
         knowledge_copy / "_manifest.md"
     ).read_text(encoding="utf-8")
+
+
+def test_update_pins_the_configured_model_and_reports_it(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch
+):
+    calls: list[str | None] = []
+
+    class ConfiguredGenerator(FakeGenerator):
+        config = SimpleNamespace(model="configured-model")
+
+        def generate(self, *, model: str | None = None, **_: object):
+            calls.append(model)
+            return SimpleNamespace(text=json.dumps({"facts": []}), model="served-model")
+
+    news_file = tmp_path / "news.json"
+    news_file.write_text(json.dumps(NEWS), encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setattr(pipeline, "create_generator", lambda: ConfiguredGenerator([]))
+
+    pipeline.main(
+        [
+            "--knowledge-dir",
+            str(knowledge_copy),
+            "--news-file",
+            str(news_file),
+            "update",
+            "--summary",
+            str(summary),
+        ]
+    )
+
+    assert calls and set(calls) == {"configured-model"}
+    assert "Model: served-model" in summary.read_text(encoding="utf-8")
