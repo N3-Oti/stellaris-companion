@@ -56,6 +56,54 @@ def test_provider_config_uses_ollama_preset(monkeypatch):
     assert config.is_configured is True
 
 
+def test_chronicle_config_follows_advisor_when_not_set_apart(monkeypatch):
+    monkeypatch.delenv("STELLARIS_CHRONICLE_PROVIDER", raising=False)
+    monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "ollama")
+    monkeypatch.setenv("STELLARIS_ADVISOR_MODEL", "advisor-model")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_MODEL", "ignored-without-provider")
+
+    config = AdvisorProviderConfig.for_chronicle()
+
+    assert config.provider == "ollama"
+    assert config.model == "advisor-model"
+
+
+def test_chronicle_config_uses_its_own_provider_without_advisor_values(monkeypatch):
+    monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "custom")
+    monkeypatch.setenv("STELLARIS_ADVISOR_MODEL", "advisor-model")
+    monkeypatch.setenv("STELLARIS_ADVISOR_BASE_URL", "https://advisor.example/v1")
+    monkeypatch.setenv("STELLARIS_ADVISOR_API_KEY", "advisor-key")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_PROVIDER", "lm_studio")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_MODEL", "small-story-model")
+    monkeypatch.delenv("STELLARIS_CHRONICLE_BASE_URL", raising=False)
+    monkeypatch.delenv("STELLARIS_CHRONICLE_API_KEY", raising=False)
+
+    chronicle = AdvisorProviderConfig.for_chronicle()
+    advisor = AdvisorProviderConfig.from_environment()
+
+    assert chronicle.provider == "lm_studio"
+    assert chronicle.model == "small-story-model"
+    assert chronicle.base_url == "http://127.0.0.1:1234/v1"
+    assert chronicle.api_key == ""
+    assert chronicle.is_configured is True
+    assert advisor.provider == "custom"
+    assert advisor.model == "advisor-model"
+
+
+def test_chronicle_gemini_uses_automatic_model_and_shared_google_key(monkeypatch):
+    monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "ollama")
+    monkeypatch.setenv("STELLARIS_ADVISOR_MODEL", "local-model")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_PROVIDER", "gemini")
+    monkeypatch.delenv("STELLARIS_CHRONICLE_MODEL", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+
+    config = AdvisorProviderConfig.for_chronicle()
+
+    assert config.provider == "gemini"
+    assert config.model == "gemini-3.8-flash"
+    assert config.api_key == "google-key"
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

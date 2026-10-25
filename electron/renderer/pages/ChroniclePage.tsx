@@ -1158,7 +1158,7 @@ function ChroniclePage({
               </div>
             )}
 
-            {chronicleProvider === 'chatgpt' && <ChatGPTUsage disabled={loading || regeneratingChapter !== null} />}
+            {chronicleProvider === 'chatgpt' && <ChatGPTUsage purpose="chronicle" disabled={loading || regeneratingChapter !== null} />}
             {error && (
               <div className="stellaris-panel bg-accent-red/10 border-accent-red/30 rounded-lg p-4 mb-4 flex flex-wrap justify-between items-center gap-3">
                 <p className="text-accent-red text-sm m-0 flex items-center gap-2">

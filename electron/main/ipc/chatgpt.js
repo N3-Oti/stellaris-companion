@@ -18,7 +18,7 @@ function registerChatGPTIpcHandlers({ ipcMain, validateSender, service, activate
       validateSender(event)
       try {
         const status = await operation(payload)
-        if (['connect', 'select-account', 'select-model', 'check'].includes(name) && status.ready) await activate(status, name)
+        if (['connect', 'select-account', 'select-model', 'check'].includes(name) && status.ready) await activate(status, name, name === 'connect' ? payload : undefined)
         if (name === 'disconnect') await changed()
         return { ok: true, status }
       } catch (error) {

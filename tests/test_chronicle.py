@@ -1761,3 +1761,16 @@ class TestSectionsToText:
         """Empty sections list produces empty string."""
         result = _sections_to_text([])
         assert result == ""
+
+
+def test_chronicle_generator_uses_separate_chronicle_provider(monkeypatch):
+    monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "chatgpt")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_PROVIDER", "ollama")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_MODEL", "local-historian")
+    monkeypatch.delenv("STELLARIS_CHRONICLE_BASE_URL", raising=False)
+
+    generator = ChronicleGenerator(db=MagicMock(), api_key="fake-key")
+
+    assert generator.provider_config.provider == "ollama"
+    assert generator.provider_config.model == "local-historian"
+    assert generator.provider_config.base_url == "http://127.0.0.1:11434/v1"

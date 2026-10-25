@@ -5,6 +5,7 @@ const {
   discoverAdvisorModels,
   getAdvisorProviderBaseUrl,
   normalizeAdvisorProvider,
+  normalizeChronicleProvider,
   normalizeProviderBaseUrl,
   testAdvisorModel,
 } = require('../main/advisorProviders')
@@ -13,6 +14,12 @@ test('provider presets resolve known local endpoints', () => {
   assert.equal(normalizeAdvisorProvider('LM Studio'), 'lm_studio')
   assert.equal(getAdvisorProviderBaseUrl('ollama'), 'http://127.0.0.1:11434/v1')
   assert.equal(getAdvisorProviderBaseUrl('lm_studio'), 'http://127.0.0.1:1234/v1')
+})
+
+test('Chronicle provider is empty when it follows the Advisor', () => {
+  for (const value of [undefined, '', '  ', 'same', 'Advisor']) assert.equal(normalizeChronicleProvider(value), '')
+  assert.equal(normalizeChronicleProvider('LM Studio'), 'lm_studio')
+  assert.equal(normalizeChronicleProvider('chatgpt'), 'chatgpt')
 })
 
 test('custom URL normalization accepts a chat endpoint and returns its API base', () => {

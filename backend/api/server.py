@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from backend.core.advisor_providers import (
     AdvisorProviderConfig,
     AdvisorProviderError,
+    has_separate_chronicle_provider,
     normalize_advisor_provider,
 )
 from backend.core.chronicle_store import ChronicleConflict, cached_chronicle_response
@@ -229,7 +230,7 @@ def _raise_provider_error(error: AdvisorProviderError) -> NoReturn:
 
 
 def _provider_health_fields(companion: Any | None) -> dict[str, Any]:
-    """Report one selected provider for both Advisor and Chronicle."""
+    """Report the Advisor provider and the Chronicle provider, which may differ."""
     provider: str | None = None
     configured: bool | None = None
 
@@ -255,11 +256,23 @@ def _provider_health_fields(companion: Any | None) -> dict[str, Any]:
         if configured is None:
             configured = environment_configured
 
+    chronicle_provider, chronicle_configured = provider, configured
+    if has_separate_chronicle_provider():
+        try:
+            chronicle_config = AdvisorProviderConfig.for_chronicle()
+            chronicle_provider = chronicle_config.provider
+            chronicle_configured = chronicle_config.is_configured
+        except ValueError:
+            chronicle_provider = normalize_advisor_provider(
+                os.environ.get("STELLARIS_CHRONICLE_PROVIDER")
+            )
+            chronicle_configured = False
+
     return {
         "advisor_provider": provider,
         "advisor_configured": configured,
-        "chronicle_provider": provider,
-        "chronicle_configured": configured,
+        "chronicle_provider": chronicle_provider,
+        "chronicle_configured": chronicle_configured,
     }
 
 

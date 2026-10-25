@@ -60,7 +60,7 @@ The connection powers both Advisor and Chronicle. No API key is needed.
 Change the **ChatGPT model** directly beneath the Advisor input, in Chronicle, or in
 Config. Terra is marked **Recommended**, Luna **Lower usage**, and the remaining available
 models appear under **More models**. Your choice is saved per account and applies to both Advisor and
-Chronicle on the next request, without interrupting a reply. Terra, Luna, and Sol use low
+Chronicle on the next request, without interrupting a reply, unless Chronicle has its own model (below). Terra, Luna, and Sol use low
 reasoning for Advisor and medium for Chronicle. Existing model choices are preserved.
 **Manage usage** opens ChatGPT settings to review plan and app limits. Account controls
 are under **Account options**. Credentials stay in the desktop main process and use the
@@ -76,6 +76,8 @@ Open **Config** and choose **Chat in Companion**, or follow the first-run setup:
 - **Custom:** enter a compatible API URL and optional key under **Online provider**. Advanced settings accept a model ID directly.
 
 The selected provider powers both Advisor and Chronicle. Setup checks use a small sample request without campaign data. For local models, use a context window of at least 32K tokens for full campaign briefings.
+
+To run Chronicle on a different provider or model, open **Config → Chronicle model**, choose a provider, and choose **Check and save**. For example, keep the Advisor on a local model so your questions stay on your device, or send Chronicle to a lighter or local model because it runs in the background. Gemini and OpenRouter keys are shared with the Advisor; a Custom provider for Chronicle has its own optional key. With ChatGPT, the model picker in Chronicle then changes only the Chronicle model. Choose **Same as Advisor** to go back to one provider.
 
 To use an existing AI app, choose **Connect your AI app** to open **MCP Relay** and follow the [connection guide](docs/local-mcp.md). No API key is needed in Companion for this route. The built-in Advisor and automatic Chronicle generation require a provider; your connected app can help draft and save Chronicle entries.
 

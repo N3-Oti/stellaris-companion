@@ -422,6 +422,20 @@
       "manualTag": "Auf Anfrage",
       "manualHelp": "Die Ereignisse werden weiter erfasst. Aktualisiere die Geschichte, wenn du neue Texte möchtest."
     },
+    "chronicleModel": {
+      "label": "CHRONIK-MODELL",
+      "help": "Die Chronik kann einen anderen Anbieter oder ein anderes Modell als der Berater verwenden, etwa ein leichteres oder lokales Modell. Die Chronik läuft im Hintergrund, daher ist Geschwindigkeit weniger wichtig als bei Antworten des Beraters.",
+      "providerLabel": "CHRONIK VERWENDET",
+      "modelLabel": "Chronik-Modell",
+      "sameAsAdvisor": "Wie Berater",
+      "useAdvisor": "BERATER-EINRICHTUNG VERWENDEN",
+      "chatgptAccountModel": "Wie das Modell des ChatGPT-Kontos",
+      "sharedKey": "Dieser {{provider}}-Schlüssel wird mit dem Berater geteilt.",
+      "geminiAutomatic": "Gemini wählt das Chronik-Modell automatisch.",
+      "localPrivacy": "Chronik-Anfragen werden vom Modellserver auf diesem Gerät oder in diesem Netzwerk verarbeitet.",
+      "remoteNotice": "Für die Chronik verwendete Kampagnenereignisse und -verläufe werden an diesen Anbieter gesendet. Deine Speicherdatei wird nie hochgeladen.",
+      "saved": "Chronik-Modell gespeichert."
+    },
     "modelRouting": {
       "label": "MODELL-ROUTING",
       "qualityFirst": "Qualitaet zuerst",

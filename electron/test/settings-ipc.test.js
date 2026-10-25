@@ -8,6 +8,8 @@ function setup() {
     advisorProvider: 'gemini',
     googleApiKey: 'saved-google-key',
     openRouterApiKey: 'saved-router-key',
+    customProviderApiKey: 'saved-advisor-custom-key',
+    chronicleProviderApiKey: 'saved-chronicle-custom-key',
   }
   let pendingKey = 'browser-key'
   let failSave = false
@@ -66,6 +68,17 @@ test('model checks resolve saved masked keys and respect explicit empty keys', a
     )
     await assert.rejects(app.invoke(channel, {}, 'untrusted'), /Untrusted/)
   }
+})
+
+test('Chronicle checks use the Chronicle key and never send a key to a local server', async () => {
+  const app = setup()
+  const check = payload => app.invoke('advisor-provider:test-model', { target: 'chronicle', apiKey: '****...****', ...payload })
+  assert.equal((await check({ provider: 'custom' })).apiKey, 'saved-chronicle-custom-key')
+  assert.equal((await check({ provider: 'ollama' })).apiKey, '')
+  assert.equal((await check({ provider: 'lm_studio' })).apiKey, '')
+  assert.equal((await check({ provider: 'openrouter' })).apiKey, 'saved-router-key')
+  assert.equal((await check({ provider: 'gemini' })).apiKey, 'saved-google-key')
+  assert.equal((await app.invoke('advisor-provider:test-model', { provider: 'custom', apiKey: '****...****' })).apiKey, 'saved-advisor-custom-key')
 })
 
 test('browser credentials are saved only when requested and are not exposed to the renderer', async () => {

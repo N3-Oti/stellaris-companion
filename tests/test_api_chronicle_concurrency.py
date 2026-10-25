@@ -210,6 +210,26 @@ def test_health_uses_selected_provider_for_chronicle(monkeypatch):
     assert payload["chronicle_configured"] is True
 
 
+def test_health_reports_separate_chronicle_provider(monkeypatch):
+    monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "custom")
+    monkeypatch.setenv("STELLARIS_ADVISOR_MODEL", "local-advisor-model")
+    monkeypatch.setenv("STELLARIS_ADVISOR_BASE_URL", "http://127.0.0.1:8080/v1")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_PROVIDER", "openrouter")
+    monkeypatch.setenv("STELLARIS_CHRONICLE_MODEL", "story/light-model")
+    monkeypatch.delenv("STELLARIS_CHRONICLE_API_KEY", raising=False)
+    app = _make_app(monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/health", headers=_auth_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["advisor_provider"] == "custom"
+    assert payload["advisor_configured"] is True
+    assert payload["chronicle_provider"] == "openrouter"
+    assert payload["chronicle_configured"] is False
+
+
 def test_health_recovers_from_invalid_provider_url(monkeypatch):
     monkeypatch.setenv("STELLARIS_ADVISOR_PROVIDER", "custom")
     monkeypatch.setenv("STELLARIS_ADVISOR_BASE_URL", "not-a-url")

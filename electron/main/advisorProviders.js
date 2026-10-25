@@ -39,6 +39,13 @@ function normalizeAdvisorProvider(rawValue) {
   return ADVISOR_PROVIDER_VALUES.includes(resolved) ? resolved : DEFAULT_ADVISOR_PROVIDER
 }
 
+// Empty means Chronicle follows the Advisor provider and model.
+function normalizeChronicleProvider(rawValue) {
+  if (typeof rawValue !== 'string' || !rawValue.trim()) return ''
+  if (['same', 'advisor'].includes(rawValue.trim().toLowerCase())) return ''
+  return normalizeAdvisorProvider(rawValue)
+}
+
 function normalizeProviderBaseUrl(rawValue) {
   const value = String(rawValue || '').trim().replace(/\/+$/, '')
   if (!value) return ''
@@ -547,6 +554,7 @@ module.exports = {
   DEFAULT_ADVISOR_PROVIDER,
   isLocalOrPrivateHost,
   normalizeAdvisorProvider,
+  normalizeChronicleProvider,
   normalizeProviderBaseUrl,
   getAdvisorProviderBaseUrl,
   discoverAdvisorModels,

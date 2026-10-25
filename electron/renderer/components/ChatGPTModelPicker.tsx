@@ -1,20 +1,39 @@
-import { useEffect, useId } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatGPT, manageChatGPTUsage } from '../hooks/useChatGPT'
+import type { Settings } from '../hooks/useSettings'
+import { CHRONICLE_PROVIDER_SAVED_EVENT } from './settings/ChronicleProviderForm'
 import { useToast } from './Toast'
 
-export default function ChatGPTModelPicker({ compact = false, disabled = false }: {
+export default function ChatGPTModelPicker({ compact = false, disabled = false, purpose = 'advisor' }: {
   compact?: boolean
   disabled?: boolean
+  purpose?: 'advisor' | 'chronicle'
 }) {
   const { t } = useTranslation()
   const { showToast } = useToast()
   const { status, modelsLoading, modelSaving, catalogError, loadModels, selectModel } = useChatGPT()
   const id = useId()
+  // A separately configured ChatGPT Chronicle model; null follows the account selection.
+  const [chronicleModel, setChronicleModel] = useState<string | null>(null)
+  const [chronicleSaving, setChronicleSaving] = useState(false)
   useEffect(() => {
     if (status?.ready && !status.models.length) void loadModels()
   }, [status?.ready, status?.account?.id, loadModels])
+  useEffect(() => {
+    if (purpose !== 'chronicle') return
+    let live = true
+    const read = () => void window.electronAPI?.getSettings().then(raw => {
+      const settings = raw as Settings
+      if (live) setChronicleModel(settings.chronicleProvider === 'chatgpt' ? settings.chronicleModel || '' : null)
+    }).catch(() => {})
+    read()
+    window.addEventListener(CHRONICLE_PROVIDER_SAVED_EVENT, read)
+    return () => { live = false; window.removeEventListener(CHRONICLE_PROVIDER_SAVED_EVENT, read) }
+  }, [purpose])
   if (!status?.ready) return null
+  const separate = chronicleModel !== null
+  const currentModel = separate ? chronicleModel || status.model : status.model
   const label = (model: { id: string; name: string }) => {
     if (model.id === status.recommendedModel) return `${model.name} · ${t('chatgpt.recommended')}`
     if (model.id === 'gpt-5.6-luna') return `${model.name} · ${t('chatgpt.lowerUsage')}`
@@ -22,11 +41,22 @@ export default function ChatGPTModelPicker({ compact = false, disabled = false }
   }
   const primary = status.models.filter(model => model.id === status.recommendedModel || model.id === 'gpt-5.6-luna')
   const other = status.models.filter(model => !primary.includes(model))
-  const selected = status.models.find(model => model.id === status.model)
-  const selectedLabel = selected ? label(selected) : status.account?.modelName || status.model
-  const saving = modelsLoading || modelSaving
+  const selected = status.models.find(model => model.id === currentModel)
+  const selectedLabel = selected ? label(selected) : (separate ? currentModel : status.account?.modelName || status.model)
+  const saving = modelsLoading || modelSaving || chronicleSaving
   async function change(model: string) {
-    if (saving || model === status?.model) return
+    if (saving || model === currentModel) return
+    if (separate) {
+      setChronicleSaving(true)
+      try {
+        await window.electronAPI?.saveSettings({ chronicleModel: model })
+        setChronicleModel(model)
+        showToast({ type: 'success', message: t('chatgpt.modelUpdated'), duration: 1800 })
+      } catch {
+        showToast({ type: 'error', message: t('chatgpt.errors.CHATGPT_UNAVAILABLE'), duration: 5000 })
+      } finally { setChronicleSaving(false) }
+      return
+    }
     const result = await selectModel(model)
     if (result?.ok) showToast({ type: 'success', message: t('chatgpt.modelUpdated'), duration: 1800 })
     else {
@@ -46,11 +76,11 @@ export default function ChatGPTModelPicker({ compact = false, disabled = false }
     {!compact && <label htmlFor={id} className="block pl-1 font-display text-[10px] tracking-widest text-text-secondary uppercase">{t('chatgpt.model')}</label>}
     <div className="relative group max-w-full">
       <select id={id} aria-label={t('chatgpt.model')} aria-busy={saving} disabled={disabled || saving || status.connecting || !status.models.length}
-        value={status.model} onChange={event => void change(event.target.value)}
+        value={currentModel} onChange={event => void change(event.target.value)}
         className={compact
           ? 'block w-auto max-w-full appearance-none rounded-sm border border-transparent bg-transparent py-1 pl-1 pr-5 font-mono text-[11px] text-accent-cyan hover:border-accent-cyan/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan disabled:opacity-50'
           : 'w-full appearance-none rounded-sm border border-white/10 bg-black/20 px-4 py-2 pr-8 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-cyan/50 focus:bg-accent-cyan/5 disabled:opacity-50'}>
-        {!status.models.length && <option value={status.model}>{selectedLabel}</option>}
+        {(!status.models.length || (separate && !selected)) && <option value={currentModel}>{selectedLabel}</option>}
         {primary.map(model => <option className="bg-bg-tertiary text-text-primary" key={model.id} value={model.id}>{label(model)}</option>)}
         {!!other.length && <optgroup label={t('chatgpt.moreModels')} className="bg-bg-tertiary text-text-secondary">
           {other.map(model => <option key={model.id} value={model.id} className="text-text-primary">{model.name}</option>)}

@@ -192,6 +192,54 @@ test('configures a compatible Advisor provider and discovers its models', async 
   }
 })
 
+test('configures a separate Chronicle model while the Advisor keeps its provider', async () => {
+  const backend = createMockChronicleBackend()
+  const backendPort = await backend.start()
+  const provider = await startProviderServer()
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stellaris-chronicle-provider-e2e-'))
+  const app = await launchApp(backendPort, userDataDir)
+
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    await page.getByRole('button', { name: /Config/i }).click()
+
+    const form = page.getByTestId('chronicle-provider-form')
+    await form.getByText('CHRONICLE MODEL', { exact: true }).click()
+    await expect(form.getByLabel('CHRONICLE USES')).toHaveValue('')
+    await form.getByLabel('CHRONICLE USES').selectOption('custom')
+    await form.getByLabel('Chronicle SERVER URL', { exact: true }).fill(`http://127.0.0.1:${provider.port}/v1`)
+    await form.getByLabel('Chronicle API KEY', { exact: true }).fill('story-key')
+    await form.getByRole('button', { name: 'Refresh models', exact: true }).click()
+    await form.getByLabel('Chronicle model', { exact: true }).selectOption('local/strategist-small')
+    await form.getByRole('button', { name: 'Check and save', exact: true }).click()
+    await expect(form.getByText('Chronicle model saved.', { exact: true })).toBeVisible()
+    expect(provider.getLastCompletionModel()).toBe('local/strategist-small')
+    expect(provider.getLastAuthorization()).toBe('Bearer story-key')
+
+    const saved = await page.evaluate(() => window.electronAPI.getSettings())
+    expect(saved.advisorProvider).toBe('gemini')
+    expect(saved.chronicleProvider).toBe('custom')
+    expect(saved.chronicleModel).toBe('local/strategist-small')
+    expect(saved.chronicleBaseUrl).toBe(`http://127.0.0.1:${provider.port}/v1`)
+    // The Advisor's Custom key is never reused for Chronicle.
+    expect(saved.customProviderApiKeySet).toBe(false)
+
+    await form.getByLabel('CHRONICLE USES').selectOption('')
+    await form.getByRole('button', { name: 'USE ADVISOR SETUP', exact: true }).click()
+    await expect(form.getByText('Chronicle model saved.', { exact: true })).toBeVisible()
+    const restored = await page.evaluate(() => window.electronAPI.getSettings())
+    expect(restored.chronicleProvider).toBe('')
+    expect(restored.chronicleModel).toBe('')
+    expect(restored.chronicleBaseUrl).toBe('')
+  } finally {
+    await app.close()
+    await provider.stop()
+    await backend.stop()
+    await fs.rm(userDataDir, { recursive: true, force: true })
+  }
+})
+
 test('turns provider failures into actionable Chat recovery', async () => {
   const backend = createMockChronicleBackend({
     advisorProvider: 'ollama',

@@ -422,6 +422,20 @@
       "manualTag": "按需更新",
       "manualHelp": "历史事件会继续记录。需要新正文时再更新故事。"
     },
+    "chronicleModel": {
+      "label": "编年史模型",
+      "help": "编年史可以使用与顾问不同的提供商或模型，例如更轻量的模型或本地模型。编年史在后台运行，因此速度不像顾问回复那样重要。",
+      "providerLabel": "编年史使用",
+      "modelLabel": "编年史模型",
+      "sameAsAdvisor": "与顾问相同",
+      "useAdvisor": "使用顾问设置",
+      "chatgptAccountModel": "与 ChatGPT 账户模型相同",
+      "sharedKey": "此 {{provider}} 密钥与顾问共用。",
+      "geminiAutomatic": "Gemini 会自动选择编年史模型。",
+      "localPrivacy": "编年史提示由此设备或网络上的模型服务器处理。",
+      "remoteNotice": "用于编年史的战役事件和历史会发送给此提供商。你的存档文件永远不会上传。",
+      "saved": "编年史模型已保存。"
+    },
     "modelRouting": {
       "label": "模型路由",
       "qualityFirst": "质量优先",

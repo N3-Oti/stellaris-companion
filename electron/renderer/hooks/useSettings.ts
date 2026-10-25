@@ -37,6 +37,8 @@ export const ADVISOR_PROVIDER_VALUES = [
 ] as const
 export type AdvisorProvider = (typeof ADVISOR_PROVIDER_VALUES)[number]
 export const DEFAULT_ADVISOR_PROVIDER: AdvisorProvider = 'gemini'
+// Empty means Chronicle follows the Advisor provider and model.
+export type ChronicleProvider = AdvisorProvider | ''
 
 export function normalizeAdvisorProvider(rawValue: unknown): AdvisorProvider {
   if (typeof rawValue !== 'string') return DEFAULT_ADVISOR_PROVIDER
@@ -47,6 +49,11 @@ export function normalizeAdvisorProvider(rawValue: unknown): AdvisorProvider {
   return (ADVISOR_PROVIDER_VALUES as readonly string[]).includes(normalized)
     ? normalized as AdvisorProvider
     : DEFAULT_ADVISOR_PROVIDER
+}
+
+export function normalizeChronicleProvider(rawValue: unknown): ChronicleProvider {
+  if (typeof rawValue !== 'string' || !rawValue.trim()) return ''
+  return normalizeAdvisorProvider(rawValue)
 }
 
 export function normalizeUiTheme(rawValue: unknown): UiTheme {
@@ -110,6 +117,11 @@ export interface Settings {
   advisorProvider: AdvisorProvider
   advisorModel: string
   advisorBaseUrl: string
+  chronicleProvider: ChronicleProvider
+  chronicleModel: string
+  chronicleBaseUrl: string
+  chronicleProviderApiKey: string
+  chronicleProviderApiKeySet: boolean
   discordToken: string
   discordTokenSet: boolean
   saveDir: string
@@ -161,6 +173,7 @@ export function useSettings(): UseSettingsResult {
         language?: unknown
         resolvedLanguage?: unknown
         advisorProvider?: unknown
+        chronicleProvider?: unknown
         updateChannel?: unknown
         secretStorageAvailable?: unknown
         secretStorageBackend?: unknown
@@ -184,6 +197,11 @@ export function useSettings(): UseSettingsResult {
         openRouterApiKeySet: !!loaded.openRouterApiKeySet,
         customProviderApiKey: loaded.customProviderApiKey || '',
         customProviderApiKeySet: !!loaded.customProviderApiKeySet,
+        chronicleProvider: normalizeChronicleProvider(loaded.chronicleProvider),
+        chronicleModel: loaded.chronicleModel || '',
+        chronicleBaseUrl: loaded.chronicleBaseUrl || '',
+        chronicleProviderApiKey: loaded.chronicleProviderApiKey || '',
+        chronicleProviderApiKeySet: !!loaded.chronicleProviderApiKeySet,
         updateChannel: normalizeUpdateChannel(loaded.updateChannel),
         secretStorageAvailable: loaded.secretStorageAvailable === true,
         secretStorageReadFailed: loaded.secretStorageReadFailed === true,
@@ -234,6 +252,10 @@ export function useSettings(): UseSettingsResult {
 
         if (newSettings.customProviderApiKey !== undefined && !newSettings.customProviderApiKey.includes('...')) {
           updated.customProviderApiKeySet = !!newSettings.customProviderApiKey
+        }
+
+        if (newSettings.chronicleProviderApiKey !== undefined && !newSettings.chronicleProviderApiKey.includes('...')) {
+          updated.chronicleProviderApiKeySet = !!newSettings.chronicleProviderApiKey
         }
 
         // If discordToken was changed (not masked), update the Set flag

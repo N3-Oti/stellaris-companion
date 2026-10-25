@@ -429,6 +429,20 @@
       "manualTag": "Sur demande",
       "manualHelp": "Les événements continuent d’être enregistrés. Actualisez l’histoire pour obtenir du nouveau texte."
     },
+    "chronicleModel": {
+      "label": "MODÈLE DE LA CHRONIQUE",
+      "help": "La Chronique peut utiliser un fournisseur ou un modèle différent de celui du Conseiller, par exemple un modèle plus léger ou local. La Chronique s’exécute en arrière-plan : la vitesse y compte moins que pour les réponses du Conseiller.",
+      "providerLabel": "LA CHRONIQUE UTILISE",
+      "modelLabel": "Modèle de la Chronique",
+      "sameAsAdvisor": "Comme le Conseiller",
+      "useAdvisor": "UTILISER LA CONFIGURATION DU CONSEILLER",
+      "chatgptAccountModel": "Comme le modèle du compte ChatGPT",
+      "sharedKey": "Cette clé {{provider}} est partagée avec le Conseiller.",
+      "geminiAutomatic": "Gemini choisit automatiquement le modèle de la Chronique.",
+      "localPrivacy": "Les requêtes de la Chronique sont traitées par le serveur de modèles sur cet appareil ou ce réseau.",
+      "remoteNotice": "Les événements et l’historique de campagne utilisés pour la Chronique sont envoyés à ce fournisseur. Votre fichier de sauvegarde n’est jamais téléversé.",
+      "saved": "Modèle de la Chronique enregistré."
+    },
     "modelRouting": {
       "label": "ROUTAGE MODELE",
       "qualityFirst": "Qualite d'abord",

@@ -19,6 +19,8 @@ test('language-only saves cannot configure or restart the backend', () => {
   assert.equal(changesBackendConfiguration({ language: 'de', uiTheme: 'command-amber' }), false)
   assert.equal(changesBackendConfiguration({ saveDir: '/tmp/fictional-saves' }), true)
   assert.equal(changesBackendConfiguration({ playerName: 'Fictional Empire' }), true)
+  assert.equal(changesBackendConfiguration({ chronicleProvider: 'ollama' }), true)
+  assert.equal(changesBackendConfiguration({ chronicleModel: 'light-model' }), true)
 })
 
 test('tray cache changes when locale changes without a connection change', () => {

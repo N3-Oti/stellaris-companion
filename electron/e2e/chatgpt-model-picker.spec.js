@@ -77,6 +77,31 @@ test('shared picker switches in place, retains provider drafts and conversation,
   } finally { await f.close() }
 })
 
+test('Chronicle can keep its own ChatGPT model while the Advisor keeps the account model', async () => {
+  const f = await fixture()
+  const { page } = f
+  try {
+    const form = page.getByTestId('chronicle-provider-form')
+    await form.getByText('CHRONICLE MODEL', { exact: true }).click()
+    await form.getByLabel('CHRONICLE USES').selectOption('chatgpt')
+    await form.getByLabel('Chronicle model', { exact: true }).selectOption('gpt-5.6-luna')
+    await form.getByRole('button', { name: 'Check and save', exact: true }).click()
+    await expect(form.getByText('Chronicle model saved.', { exact: true })).toBeVisible()
+    let saved = await page.evaluate(() => window.electronAPI.getSettings())
+    expect(saved).toMatchObject({ advisorProvider: 'chatgpt', advisorModel: 'gpt-5.6-terra', chronicleProvider: 'chatgpt', chronicleModel: 'gpt-5.6-luna' })
+
+    await page.getByRole('button', { name: /Chronicle/i }).click()
+    await expect(picker(page)).toHaveValue('gpt-5.6-luna')
+    await picker(page).selectOption('gpt-6-astra')
+    await expect(page.getByRole('status').getByText('Model updated', { exact: true })).toBeVisible()
+    saved = await page.evaluate(() => window.electronAPI.getSettings())
+    expect(saved).toMatchObject({ advisorModel: 'gpt-5.6-terra', chronicleModel: 'gpt-6-astra' })
+
+    await page.getByRole('button', { name: /◈\s*Advisor/i }).click()
+    await expect(picker(page)).toHaveValue('gpt-5.6-terra')
+  } finally { await f.close() }
+})
+
 test('model saves show success only when persisted, and a failed selection retains the previous model', async () => {
   const f = await fixture()
   const { page, app } = f

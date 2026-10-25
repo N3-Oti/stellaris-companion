@@ -57,6 +57,8 @@ function registerSettingsIpcHandlers({
     if (typeof submitted === 'string' && !submitted.includes('...')) return submitted.trim()
     if (provider === 'gemini') return settings.googleApiKey
     if (provider === 'openrouter') return settings.openRouterApiKey
+    // Chronicle keeps its own Custom key and never sends one to a local server.
+    if (payload.target === 'chronicle') return provider === 'custom' ? settings.chronicleProviderApiKey : ''
     if (['custom', 'ollama', 'lm_studio'].includes(provider)) return settings.customProviderApiKey
     return ''
   }

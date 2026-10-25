@@ -359,7 +359,7 @@ class ChronicleGenerator:
         self.provider_config = (
             provider_config
             or getattr(provider_generator, "config", None)
-            or AdvisorProviderConfig.from_environment(google_api_key=self.api_key)
+            or AdvisorProviderConfig.for_chronicle(google_api_key=self.api_key)
         )
         self._client: genai.Client | None = None
         self._provider_generator = provider_generator

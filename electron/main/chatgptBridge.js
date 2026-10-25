@@ -3,7 +3,7 @@ const crypto = require('node:crypto')
 const { ChatGPTError } = require('./chatgpt')
 
 // Python receives this short-lived local capability, never an OpenAI token.
-function createChatGPTBridge(service) {
+function createChatGPTBridge(service, { modelFor = () => '' } = {}) {
   const token = crypto.randomBytes(32).toString('base64url')
   let url = ''
   const server = http.createServer(async (request, response) => {
@@ -33,6 +33,7 @@ function createChatGPTBridge(service) {
           || (payload.schemaName && !/^[a-zA-Z0-9_-]{1,64}$/.test(payload.schemaName))) {
         send(400, { code: 'CHATGPT_INVALID_RESPONSE', error: 'Invalid generation request.' }); return
       }
+      if (!payload.model) payload.model = modelFor(payload.purpose || 'advisor') || undefined
       const result = await service.generate(payload)
       send(200, result)
     } catch (error) {

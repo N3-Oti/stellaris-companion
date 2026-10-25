@@ -255,6 +255,22 @@ test('local bridge requires a capability, rejects browser origins and returns on
   } finally { bridge.close() }
 })
 
+test('local bridge applies a separate Chronicle model only when the request names none', async () => {
+  const models = []
+  const bridge = createChatGPTBridge({ generate: async payload => { models.push(payload.model); return { text: 'Story', model: payload.model } } },
+    { modelFor: purpose => purpose === 'chronicle' ? 'gpt-5.6-luna' : '' })
+  await bridge.start()
+  const { url, token } = bridge.connection()
+  const send = body => fetch(`${url}/generate`, { method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ instructions: 'history', input: 'campaign', ...body }) })
+  try {
+    for (const body of [{ purpose: 'chronicle' }, { purpose: 'advisor' }, {}, { purpose: 'chronicle', model: 'gpt-5.6-terra' }]) {
+      assert.equal((await send(body)).status, 200)
+    }
+    assert.deepEqual(models, ['gpt-5.6-luna', undefined, undefined, 'gpt-5.6-terra'])
+  } finally { bridge.close() }
+})
+
 test('reauthorization reuses the registration and rejects another account subject', async () => {
   let subject = 'commander'
   const authorizationURLs = []

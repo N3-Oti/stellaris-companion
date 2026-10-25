@@ -32,6 +32,7 @@ import { HUDSelect } from '../components/hud/HUDForm'
 import { useToast } from '../components/Toast'
 import { AISetupForm } from '../components/settings/AISetupForm'
 import { ChronicleRefreshControl } from '../components/settings/ChronicleRefreshControl'
+import { ChronicleProviderForm } from '../components/settings/ChronicleProviderForm'
 import { PreferenceFeedback } from '../components/settings/PreferenceFeedback'
 import { AISetupChoice, type AISetupRoute } from '../components/settings/AISetupChoice'
 import { MCPRelayPanel } from '../components/settings/MCPRelayPanel'
@@ -557,6 +558,7 @@ function SettingsPage({
                         </div>
                         <p className="text-xs text-text-secondary">{geminiQuotaHelper(geminiQuotaMode)}</p>
                       </div>}
+                      <ChronicleProviderForm initialSettings={settings} onSave={saveSettings} />
                       <ChronicleRefreshControl mode={chronicleRefreshMode} saving={chronicleRefreshModeSaving} saved={savedPreferences.chronicleRefreshMode} onChange={mode => void handleChronicleRefreshModeChange(mode)} />
                       </>}
                     </div>

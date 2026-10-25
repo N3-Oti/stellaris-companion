@@ -23,6 +23,7 @@ function resolveLanguage(language, osLocale = '') {
 const BACKEND_SETTINGS_KEYS = [
   'googleApiKey', 'openRouterApiKey', 'customProviderApiKey',
   'advisorProvider', 'advisorModel', 'advisorBaseUrl',
+  'chronicleProvider', 'chronicleModel', 'chronicleBaseUrl', 'chronicleProviderApiKey',
   'saveDir', 'savePath', 'modelRoutingMode',
   'playerName', 'playerCountryId',
 ]

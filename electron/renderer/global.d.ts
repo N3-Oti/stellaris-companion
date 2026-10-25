@@ -232,7 +232,7 @@ declare global {
       // Settings
       chatgpt: {
         status: () => Promise<ChatGPTResult>
-        connect: (options?: { profileId?: string; newAccount?: boolean }) => Promise<ChatGPTResult>
+        connect: (options?: { profileId?: string; newAccount?: boolean; target?: 'advisor' | 'chronicle' }) => Promise<ChatGPTResult>
         cancel: () => Promise<ChatGPTResult>
         reopen: () => Promise<ChatGPTResult>
         selectAccount: (id: string) => Promise<ChatGPTResult>
@@ -254,6 +254,7 @@ declare global {
           baseUrl?: string
           apiKey?: string
           credentialId?: string
+          target?: 'advisor' | 'chronicle'
         }) => Promise<{
           ok: boolean
           models?: Array<{
@@ -276,6 +277,7 @@ declare global {
           baseUrl?: string
           apiKey?: string
           credentialId?: string
+          target?: 'advisor' | 'chronicle'
           model: string
         }) => Promise<{
           ok: boolean

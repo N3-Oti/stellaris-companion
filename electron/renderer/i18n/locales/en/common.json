@@ -696,6 +696,20 @@
       "manualTag": "On request",
       "manualHelp": "History keeps accumulating. Use Update story when you want new prose."
     },
+    "chronicleModel": {
+      "label": "CHRONICLE MODEL",
+      "help": "Chronicle can use a different provider or model from the Advisor, such as a lighter or local model. Chronicle runs in the background, so speed matters less than for Advisor replies.",
+      "providerLabel": "CHRONICLE USES",
+      "modelLabel": "Chronicle model",
+      "sameAsAdvisor": "Same as Advisor",
+      "useAdvisor": "USE ADVISOR SETUP",
+      "chatgptAccountModel": "Same as the ChatGPT account model",
+      "sharedKey": "This {{provider}} key is shared with the Advisor.",
+      "geminiAutomatic": "Gemini chooses the Chronicle model automatically.",
+      "localPrivacy": "Chronicle prompts are processed by the model server on this device or network.",
+      "remoteNotice": "Campaign events and history used for Chronicle are sent to this provider. Your save file is never uploaded.",
+      "saved": "Chronicle model saved."
+    },
     "modelRouting": {
       "label": "MODEL USE",
       "qualityFirst": "Flash first",

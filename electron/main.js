@@ -58,6 +58,7 @@ const {
   discoverAdvisorModels,
   getAdvisorProviderBaseUrl,
   normalizeAdvisorProvider,
+  normalizeChronicleProvider,
   normalizeProviderBaseUrl,
   testAdvisorModel,
 } = require('./main/advisorProviders')
@@ -143,6 +144,8 @@ const SECRET_STORE_KEYS = {
   googleApiKey: 'secrets.google-api-key',
   openRouterApiKey: 'secrets.openrouter-api-key',
   customProviderApiKey: 'secrets.custom-provider-api-key',
+  // Chronicle's own Custom provider key, so a separate server never receives the Advisor's key.
+  chronicleProviderApiKey: 'secrets.chronicle-provider-api-key',
   discordToken: 'secrets.discord-token',
   discordAccessToken: 'secrets.discord-access-token',
   discordRefreshToken: 'secrets.discord-refresh-token',
@@ -197,7 +200,11 @@ const chatgptService = createChatGPTService({
   ...(IS_E2E && !app.isPackaged && process.env.NODE_ENV === 'test' && process.env.E2E_CHATGPT_MOCK === '1'
     ? require('./e2e/helpers/chatgptFixture').createChatGPTFixture() : {}),
 })
-const chatgptBridge = createChatGPTBridge(chatgptService)
+// A separate ChatGPT Chronicle model applies on the next request without a backend restart.
+const chatgptBridge = createChatGPTBridge(chatgptService, {
+  modelFor: purpose => purpose === 'chronicle' && store.get('chronicleProvider') === 'chatgpt'
+    ? String(store.get('chronicleModel', '') || '') : '',
+})
 
 const announcementsService = createAnnouncementsService({ app, store })
 
@@ -337,37 +344,53 @@ function buildBackendEnv(settings) {
   }
 
   const advisorProvider = normalizeAdvisorProvider(settings.advisorProvider)
-  delete env.STELLARIS_ADVISOR_MODEL
-  delete env.STELLARIS_ADVISOR_BASE_URL
-  delete env.STELLARIS_ADVISOR_API_KEY
+  const chronicleProvider = normalizeChronicleProvider(settings.chronicleProvider)
+  for (const prefix of ['STELLARIS_ADVISOR', 'STELLARIS_CHRONICLE']) {
+    for (const suffix of ['PROVIDER', 'MODEL', 'BASE_URL', 'API_KEY']) delete env[`${prefix}_${suffix}`]
+  }
   delete env.STELLARIS_CHATGPT_BRIDGE_URL
   delete env.STELLARIS_CHATGPT_BRIDGE_TOKEN
-  env.STELLARIS_ADVISOR_PROVIDER = advisorProvider
-  if (settings.advisorModel) {
-    env.STELLARIS_ADVISOR_MODEL = String(settings.advisorModel).trim()
+  const chatgptReady = chatgptService.status().ready
+  const setProviderEnv = (prefix, label, provider, model, baseUrl, apiKey) => {
+    env[`${prefix}_PROVIDER`] = provider
+    if (model) env[`${prefix}_MODEL`] = String(model).trim()
+    let resolvedBaseUrl = ''
+    try {
+      resolvedBaseUrl = getAdvisorProviderBaseUrl(provider, baseUrl)
+    } catch (error) {
+      console.warn(`Ignoring invalid ${label} provider URL:`, error instanceof Error ? error.message : error)
+    }
+    if (resolvedBaseUrl) env[`${prefix}_BASE_URL`] = resolvedBaseUrl
+    if (apiKey) env[`${prefix}_API_KEY`] = apiKey
+    if (provider === 'chatgpt' && chatgptReady) {
+      const bridge = chatgptBridge.connection()
+      env.STELLARIS_CHATGPT_BRIDGE_URL = bridge.url
+      env.STELLARIS_CHATGPT_BRIDGE_TOKEN = bridge.token
+      // The Advisor follows the account selection; Chronicle may pin its own model.
+      if (prefix === 'STELLARIS_ADVISOR' || !model) env[`${prefix}_MODEL`] = chatgptService.status().model
+    }
   }
-  let advisorBaseUrl = ''
-  try {
-    advisorBaseUrl = getAdvisorProviderBaseUrl(advisorProvider, settings.advisorBaseUrl)
-  } catch (error) {
-    console.warn('Ignoring invalid Advisor provider URL:', error instanceof Error ? error.message : error)
-  }
-  if (advisorBaseUrl) {
-    env.STELLARIS_ADVISOR_BASE_URL = advisorBaseUrl
-  }
-  const advisorApiKey = advisorProvider === 'openrouter'
-    ? settings.openRouterApiKey
-    : ['custom', 'ollama', 'lm_studio'].includes(advisorProvider)
-      ? settings.customProviderApiKey
-      : ''
-  if (advisorApiKey) {
-    env.STELLARIS_ADVISOR_API_KEY = advisorApiKey
-  }
-  if (advisorProvider === 'chatgpt' && chatgptService.status().ready) {
-    const bridge = chatgptBridge.connection()
-    env.STELLARIS_CHATGPT_BRIDGE_URL = bridge.url
-    env.STELLARIS_CHATGPT_BRIDGE_TOKEN = bridge.token
-    env.STELLARIS_ADVISOR_MODEL = chatgptService.status().model
+  setProviderEnv(
+    'STELLARIS_ADVISOR', 'Advisor', advisorProvider,
+    settings.advisorModel,
+    settings.advisorBaseUrl,
+    advisorProvider === 'openrouter'
+      ? settings.openRouterApiKey
+      : ['custom', 'ollama', 'lm_studio'].includes(advisorProvider)
+        ? settings.customProviderApiKey
+        : '',
+  )
+  if (chronicleProvider) {
+    setProviderEnv(
+      'STELLARIS_CHRONICLE', 'Chronicle', chronicleProvider,
+      settings.chronicleModel,
+      settings.chronicleBaseUrl,
+      chronicleProvider === 'openrouter'
+        ? settings.openRouterApiKey
+        : chronicleProvider === 'custom'
+          ? settings.chronicleProviderApiKey
+          : '',
+    )
   }
 
   env.STELLARIS_MODEL_ROUTING_MODE = normalizeModelRoutingMode(settings.modelRoutingMode)
@@ -880,6 +903,7 @@ function getSettings() {
   const googleApiKey = getSecret(SECRET_STORE_KEYS.googleApiKey)
   const openRouterApiKey = getSecret(SECRET_STORE_KEYS.openRouterApiKey)
   const customProviderApiKey = getSecret(SECRET_STORE_KEYS.customProviderApiKey)
+  const chronicleProviderApiKey = getSecret(SECRET_STORE_KEYS.chronicleProviderApiKey)
   const discordToken = getSecret(SECRET_STORE_KEYS.discordToken)
   const secretStorageStatus = secretStorage.getStatus()
   // Preserve masked fields during an ordinary settings save if a key is locked.
@@ -900,6 +924,9 @@ function getSettings() {
   )
   const advisorModel = String(store.get('advisorModel', '') || '')
   const advisorBaseUrl = String(store.get('advisorBaseUrl', '') || '')
+  const chronicleProvider = normalizeChronicleProvider(store.get('chronicleProvider', ''))
+  const chronicleModel = String(store.get('chronicleModel', '') || '')
+  const chronicleBaseUrl = String(store.get('chronicleBaseUrl', '') || '')
   const updateChannel = getUpdateChannelSetting()
 
   return {
@@ -909,12 +936,17 @@ function getSettings() {
     openRouterApiKeySet: !!(openRouterApiKey || store.get(SECRET_STORE_KEYS.openRouterApiKey)),
     customProviderApiKey: maskedStoredSecret(SECRET_STORE_KEYS.customProviderApiKey, customProviderApiKey),
     customProviderApiKeySet: !!(customProviderApiKey || store.get(SECRET_STORE_KEYS.customProviderApiKey)),
+    chronicleProviderApiKey: maskedStoredSecret(SECRET_STORE_KEYS.chronicleProviderApiKey, chronicleProviderApiKey),
+    chronicleProviderApiKeySet: !!(chronicleProviderApiKey || store.get(SECRET_STORE_KEYS.chronicleProviderApiKey)),
     secretStorageAvailable: secretStorageStatus.persistentEncryptionAvailable,
     secretStorageReadFailed: secretStorageStatus.decryptionFailed,
     secretStorageBackend: secretStorageStatus.backend,
     advisorProvider,
     advisorModel,
     advisorBaseUrl,
+    chronicleProvider,
+    chronicleModel,
+    chronicleBaseUrl,
     discordToken: maskedStoredSecret(SECRET_STORE_KEYS.discordToken, discordToken),
     discordTokenSet: !!(discordToken || store.get(SECRET_STORE_KEYS.discordToken)),
     saveDir,
@@ -942,6 +974,7 @@ function getSettingsWithSecrets() {
   const googleApiKey = getSecret(SECRET_STORE_KEYS.googleApiKey) || ''
   const openRouterApiKey = getSecret(SECRET_STORE_KEYS.openRouterApiKey) || ''
   const customProviderApiKey = getSecret(SECRET_STORE_KEYS.customProviderApiKey) || ''
+  const chronicleProviderApiKey = getSecret(SECRET_STORE_KEYS.chronicleProviderApiKey) || ''
   if (!secretStorageStatus.persistentEncryptionAvailable) {
     // Remove a legacy publisher key from unprotected disk storage, retaining it
     // only for this process. Publishing remains disabled until storage is safe.
@@ -964,15 +997,22 @@ function getSettingsWithSecrets() {
   )
   const advisorModel = String(store.get('advisorModel', '') || '')
   const advisorBaseUrl = String(store.get('advisorBaseUrl', '') || '')
+  const chronicleProvider = normalizeChronicleProvider(store.get('chronicleProvider', ''))
+  const chronicleModel = String(store.get('chronicleModel', '') || '')
+  const chronicleBaseUrl = String(store.get('chronicleBaseUrl', '') || '')
   const updateChannel = getUpdateChannelSetting()
 
   return {
     googleApiKey,
     openRouterApiKey,
     customProviderApiKey,
+    chronicleProviderApiKey,
     advisorProvider,
     advisorModel,
     advisorBaseUrl,
+    chronicleProvider,
+    chronicleModel,
+    chronicleBaseUrl,
     discordToken,
     saveDir,
     // Backwards-compat: older renderer builds may still send/expect `savePath`.
@@ -1001,6 +1041,9 @@ function saveSettings(settings) {
   const normalizedAdvisorBaseUrl = settings.advisorBaseUrl !== undefined
     ? normalizeProviderBaseUrl(settings.advisorBaseUrl)
     : null
+  const normalizedChronicleBaseUrl = settings.chronicleBaseUrl !== undefined
+    ? normalizeProviderBaseUrl(settings.chronicleBaseUrl)
+    : null
 
   if (settings.googleApiKey !== undefined && !settings.googleApiKey.includes('...')) {
     setSecret(SECRET_STORE_KEYS.googleApiKey, settings.googleApiKey || null)
@@ -1028,6 +1071,22 @@ function saveSettings(settings) {
 
   if (settings.advisorBaseUrl !== undefined) {
     store.set('advisorBaseUrl', normalizedAdvisorBaseUrl)
+  }
+
+  if (settings.chronicleProviderApiKey !== undefined && !settings.chronicleProviderApiKey.includes('...')) {
+    setSecret(SECRET_STORE_KEYS.chronicleProviderApiKey, settings.chronicleProviderApiKey || null)
+  }
+
+  if (settings.chronicleProvider !== undefined) {
+    store.set('chronicleProvider', normalizeChronicleProvider(settings.chronicleProvider))
+  }
+
+  if (settings.chronicleModel !== undefined) {
+    store.set('chronicleModel', String(settings.chronicleModel || '').trim())
+  }
+
+  if (settings.chronicleBaseUrl !== undefined) {
+    store.set('chronicleBaseUrl', normalizedChronicleBaseUrl)
   }
 
   const nextSaveDir = settings.saveDir !== undefined ? settings.saveDir : settings.savePath
@@ -1634,7 +1693,10 @@ ipcMain.handle('get-backend-log-tail', async (event, { maxBytes } = {}) => {
 const openRouterOAuth = createOpenRouterOAuth({ openExternal: url => shell.openExternal(url) })
 app.on('before-quit', () => openRouterOAuth.cancel())
 async function applySavedSettings(fullSettings, changedSettings = {}) {
-  const backendRelevantSettingsChanged = changesBackendConfiguration(changedSettings)
+  // The ChatGPT bridge reads a separate Chronicle model per request.
+  const chatgptChronicleModelOnly = store.get('chronicleProvider') === 'chatgpt'
+    && Object.keys(changedSettings).every(key => key === 'chronicleModel')
+  const backendRelevantSettingsChanged = !chatgptChronicleModelOnly && changesBackendConfiguration(changedSettings)
   if (backendRelevantSettingsChanged) backendConfigured = true
   if (changedSettings.language !== undefined) updateTrayMenu()
   if (backendRelevantSettingsChanged && !E2E_SKIP_BACKEND_AUTOSTART) restartPythonBackend(fullSettings)
@@ -1642,14 +1704,21 @@ async function applySavedSettings(fullSettings, changedSettings = {}) {
 
 registerChatGPTIpcHandlers({
   ipcMain, validateSender, service: chatgptService,
-  activate: async (status, operation) => {
+  activate: async (status, operation, options) => {
+    // Connecting for Chronicle alone keeps the Advisor provider unchanged.
+    if (options?.target === 'chronicle') {
+      if (store.get('chronicleProvider') === 'chatgpt' || store.get('advisorProvider') === 'chatgpt') {
+        await applySavedSettings(await getSettingsWithSecrets(), { chronicleProvider: 'chatgpt' })
+      }
+      return
+    }
     const modelOnly = operation === 'select-model' && store.get('advisorProvider') === 'chatgpt'
     const settings = { advisorProvider: 'chatgpt', advisorModel: status.model, advisorBaseUrl: '' }
     await saveSettings(settings)
     if (!modelOnly) await applySavedSettings(await getSettingsWithSecrets(), settings)
   },
   changed: async () => {
-    if (store.get('advisorProvider') === 'chatgpt') {
+    if (store.get('advisorProvider') === 'chatgpt' || store.get('chronicleProvider') === 'chatgpt') {
       await applySavedSettings(await getSettingsWithSecrets(), { advisorProvider: 'chatgpt' })
     }
   },

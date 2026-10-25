@@ -429,6 +429,20 @@
       "manualTag": "Sob demanda",
       "manualHelp": "O histórico continua crescendo. Atualize a história quando quiser novos textos."
     },
+    "chronicleModel": {
+      "label": "MODELO DA CRÔNICA",
+      "help": "A Crônica pode usar um provedor ou modelo diferente do Conselheiro, como um modelo mais leve ou local. A Crônica roda em segundo plano, então a velocidade importa menos do que nas respostas do Conselheiro.",
+      "providerLabel": "A CRÔNICA USA",
+      "modelLabel": "Modelo da Crônica",
+      "sameAsAdvisor": "Igual ao Conselheiro",
+      "useAdvisor": "USAR A CONFIGURAÇÃO DO CONSELHEIRO",
+      "chatgptAccountModel": "Igual ao modelo da conta do ChatGPT",
+      "sharedKey": "Esta chave do {{provider}} é compartilhada com o Conselheiro.",
+      "geminiAutomatic": "O Gemini escolhe o modelo da Crônica automaticamente.",
+      "localPrivacy": "As solicitações da Crônica são processadas pelo servidor de modelos neste dispositivo ou rede.",
+      "remoteNotice": "Eventos e histórico de campanha usados na Crônica são enviados a este provedor. Seu arquivo de salvamento nunca é enviado.",
+      "saved": "Modelo da Crônica salvo."
+    },
     "modelRouting": {
       "label": "ROTEAMENTO DE MODELO",
       "qualityFirst": "Qualidade primeiro",

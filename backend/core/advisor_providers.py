@@ -51,6 +51,10 @@ ADVISOR_PROVIDERS = {
     ADVISOR_PROVIDER_CHATGPT,
 }
 
+ADVISOR_ENV_PREFIX = "STELLARIS_ADVISOR"
+# Optional. When unset, Chronicle uses the Advisor provider and model.
+CHRONICLE_ENV_PREFIX = "STELLARIS_CHRONICLE"
+
 PROVIDER_BASE_URLS = {
     ADVISOR_PROVIDER_OLLAMA: "http://127.0.0.1:11434/v1",
     ADVISOR_PROVIDER_LM_STUDIO: "http://127.0.0.1:1234/v1",
@@ -77,6 +81,10 @@ def normalize_advisor_provider(value: Any) -> str:
     }
     normalized = aliases.get(normalized, normalized)
     return normalized if normalized in ADVISOR_PROVIDERS else ADVISOR_PROVIDER_GEMINI
+
+
+def has_separate_chronicle_provider() -> bool:
+    return bool(str(os.environ.get(f"{CHRONICLE_ENV_PREFIX}_PROVIDER") or "").strip())
 
 
 def normalize_base_url(value: str | None) -> str:
@@ -146,17 +154,18 @@ class AdvisorProviderConfig:
         base_url: str | None = None,
         advisor_api_key: str | None = None,
         google_api_key: str | None = None,
+        env_prefix: str = ADVISOR_ENV_PREFIX,
     ) -> AdvisorProviderConfig:
         selected_provider = normalize_advisor_provider(
-            provider or os.environ.get("STELLARIS_ADVISOR_PROVIDER")
+            provider or os.environ.get(f"{env_prefix}_PROVIDER")
         )
-        configured_model = str(model or os.environ.get("STELLARIS_ADVISOR_MODEL") or "").strip()
+        configured_model = str(model or os.environ.get(f"{env_prefix}_MODEL") or "").strip()
         if selected_provider == ADVISOR_PROVIDER_GEMINI and not configured_model:
             configured_model = GEMINI_FLASH_MODEL
 
         configured_url = str(
             base_url
-            or os.environ.get("STELLARIS_ADVISOR_BASE_URL")
+            or os.environ.get(f"{env_prefix}_BASE_URL")
             or PROVIDER_BASE_URLS.get(selected_provider, "")
         ).strip()
         if configured_url:
@@ -181,9 +190,7 @@ class AdvisorProviderConfig:
             ):
                 configured_url = ""
         else:
-            configured_key = str(
-                advisor_api_key or os.environ.get("STELLARIS_ADVISOR_API_KEY") or ""
-            )
+            configured_key = str(advisor_api_key or os.environ.get(f"{env_prefix}_API_KEY") or "")
 
         return cls(
             provider=selected_provider,
@@ -191,6 +198,13 @@ class AdvisorProviderConfig:
             base_url=configured_url,
             api_key=configured_key,
         )
+
+    @classmethod
+    def for_chronicle(cls, *, google_api_key: str | None = None) -> AdvisorProviderConfig:
+        """Resolve Chronicle's provider, which follows the Advisor unless set apart."""
+        if not has_separate_chronicle_provider():
+            return cls.from_environment(google_api_key=google_api_key)
+        return cls.from_environment(google_api_key=google_api_key, env_prefix=CHRONICLE_ENV_PREFIX)
 
     @property
     def is_configured(self) -> bool:
