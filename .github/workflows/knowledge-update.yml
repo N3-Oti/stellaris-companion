@@ -3,10 +3,6 @@ name: Knowledge update
 # Drafts mechanics knowledge-graph changes for new stable Stellaris releases and opens a
 # pull request for human review. See docs/knowledge-graph.md.
 on:
-  # TEMPORARY: run once from this branch to test the pipeline; remove before merging.
-  push:
-    branches: [claude/knowledge-pipeline]
-    paths: ['.github/workflows/knowledge-update.yml']
   schedule:
     - cron: '23 4 * * *'
   workflow_dispatch:
