@@ -127,20 +127,61 @@ when an older release line is added to the graph.
 
 ## Maintenance pipeline
 
-New releases are proposed as pull requests and merged after human review:
+`scripts/knowledge_pipeline.py` drafts graph changes for new stable releases; a maintainer
+reviews them as a pull request.
 
-1. A daily workflow checks the Stellaris Steam news feed for a stable release that the graph
-   does not cover. Open betas are ignored.
-2. A model (GitHub Models by default in CI, or any configured provider locally) maps the release
-   notes to notes and proposes, per note: raise `verified_through` when shipped data confirms it,
-   close a changed fact with `until` and add its replacement, or create a new note with terms
-   for every locale.
-3. Each proposed fact must quote its source sentence. The quote is checked against the fetched
-   text, and unsupported facts are dropped.
-4. Tests run and the result is opened as a pull request for review.
+1. **Find releases.** `check` reads the Stellaris Steam news feed and lists stable release
+   announcements whose version is at or above `min_version` and not yet known to the graph
+   (as a fact's `since`, a note's `verified_through`, or `reviewed_releases`). Titles marked
+   beta, preview, or preliminary are skipped.
+2. **Propose facts.** `update` splits the release notes into excerpts small enough for free-tier
+   request limits and sends each with a catalog of note titles and current fact labels. The model
+   returns structured proposals: target note, label, present-tense fact, a verbatim quote, and an
+   optional label of the fact it supersedes.
+3. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
+   change-history wording, it names an unknown note without asking for a new one, or the fact it
+   claims to supersede does not exist. New notes get terms for every locale from a second request
+   and are rejected without them.
+4. **Edit.** Accepted facts are added with `{since: <release>}` before the note's `Related:` line.
+   A superseded fact, or a current fact with the same label, is closed with `until`. The release is
+   appended to `reviewed_releases`, even when nothing changed, so it is not proposed again.
+   `verified_through` is never raised by the pipeline.
+5. **Report.** A summary lists accepted facts with their quotes, rejected proposals with reasons,
+   and anything needing attention, such as a new release line that may belong in `breaking_lines`.
 
-Release-note facts are added without raising `verified_through`, so they are labeled partial
-until someone confirms them against the shipped game, as `patches/README.md` requires.
+### Running locally
+
+Any supported provider works; nothing is fixed to one vendor:
+
+```sh
+python scripts/knowledge_pipeline.py check
+KNOWLEDGE_PROVIDER=gemini KNOWLEDGE_API_KEY=... \
+  python scripts/knowledge_pipeline.py update --summary summary.md
+KNOWLEDGE_PROVIDER=custom KNOWLEDGE_BASE_URL=https://openrouter.ai/api/v1 \
+  KNOWLEDGE_MODEL=... KNOWLEDGE_API_KEY=... python scripts/knowledge_pipeline.py update --dry-run
+```
+
+`--news-file` reads a saved Steam news JSON response instead of fetching the feed.
+
+### Daily workflow
+
+`.github/workflows/knowledge-update.yml` runs daily and on demand. It processes the oldest
+unreviewed release, runs the knowledge tests, and opens a pull request from
+`knowledge/update-<version>`. It skips a release whose branch already exists.
+
+By default it calls [GitHub Models](https://docs.github.com/en/github-models) with the job's
+`GITHUB_TOKEN` (`models: read`), so no API key is required. Repository variables
+`KNOWLEDGE_PROVIDER`, `KNOWLEDGE_BASE_URL`, and `KNOWLEDGE_MODEL`, plus a `KNOWLEDGE_API_KEY`
+secret, switch it to another provider or model. Free GitHub Models requests are limited in
+size and count per day, which the excerpt splitting accounts for.
+
+To enable it in a fork:
+
+- Enable Actions for the fork; scheduled workflows are disabled in forks until then.
+- Allow **Settings > Actions > General > Allow GitHub Actions to create and approve pull
+  requests**.
+- Pull requests opened with `GITHUB_TOKEN` do not start other workflows, so the job runs the
+  knowledge tests itself before opening one.
 
 ## Testing
 

@@ -1,0 +1,93 @@
+name: Knowledge update
+
+# Drafts mechanics knowledge-graph changes for new stable Stellaris releases and opens a
+# pull request for human review. See docs/knowledge-graph.md.
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to process (default: oldest unreviewed release)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+concurrency:
+  group: knowledge-update
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pytest
+
+      - name: Find an unreviewed stable release
+        id: check
+        run: python scripts/knowledge_pipeline.py check
+
+      - name: Choose release
+        id: release
+        env:
+          REQUESTED: ${{ inputs.version }}
+          PENDING: ${{ steps.check.outputs.version }}
+        run: |
+          version="${REQUESTED:-$PENDING}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$version" ] && git ls-remote --exit-code --heads origin "knowledge/update-$version" > /dev/null; then
+            echo "A pull request branch for $version already exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Draft graph changes
+        id: draft
+        if: steps.release.outputs.version != '' && steps.release.outputs.skip != 'true'
+        env:
+          # Any supported provider can replace the GitHub Models defaults through
+          # repository variables and the KNOWLEDGE_API_KEY secret.
+          KNOWLEDGE_PROVIDER: ${{ vars.KNOWLEDGE_PROVIDER || 'custom' }}
+          KNOWLEDGE_BASE_URL: ${{ vars.KNOWLEDGE_BASE_URL || 'https://models.github.ai/inference' }}
+          KNOWLEDGE_MODEL: ${{ vars.KNOWLEDGE_MODEL || 'openai/gpt-4.1-mini' }}
+          KNOWLEDGE_API_KEY: ${{ secrets.KNOWLEDGE_API_KEY || github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python scripts/knowledge_pipeline.py update --version "$VERSION" --summary "$RUNNER_TEMP/summary.md"
+
+      - name: Check graph
+        if: steps.draft.outcome == 'success'
+        run: pytest tests/test_knowledge_graph.py tests/test_game_knowledge.py tests/test_knowledge_pipeline.py -q
+
+      - name: Open pull request
+        if: steps.draft.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if git diff --quiet -- patches/knowledge; then
+            echo "No graph changes to propose."
+            exit 0
+          fi
+          branch="knowledge/update-$VERSION"
+          title="chore(knowledge): draft mechanics for Stellaris $VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add patches/knowledge
+          git commit -m "$title"
+          git push origin "$branch"
+          gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/summary.md"

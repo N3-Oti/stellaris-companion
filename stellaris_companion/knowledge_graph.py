@@ -72,6 +72,8 @@ class KnowledgeGraph:
     notes: dict[str, ConceptNote]
     min_version: Version | None
     breaking_lines: tuple[tuple[int, int], ...]
+    # Releases whose notes were reviewed, including those that changed no fact.
+    reviewed_releases: tuple[Version, ...] = ()
 
     def resolve_link(self, target: str) -> str | None:
         key = _note_key(target)
@@ -79,6 +81,7 @@ class KnowledgeGraph:
 
     def newest_line(self) -> tuple[int, int] | None:
         lines = list(self.breaking_lines)
+        lines.extend(version[:2] for version in self.reviewed_releases)
         for note in self.notes.values():
             if note.verified_through:
                 lines.append(note.verified_through[:2])
@@ -236,12 +239,16 @@ def load_knowledge_graph(directory: Path = DEFAULT_KNOWLEDGE_DIR) -> KnowledgeGr
     if not manifest_path.exists():
         return None
     manifest, _ = parse_front_matter(manifest_path.read_text(encoding="utf-8"))
-    breaking = manifest.get("breaking_lines") or ()
-    lines = tuple(
-        version[:2]
-        for item in (breaking if isinstance(breaking, tuple) else (breaking,))
-        if (version := parse_version(str(item))) is not None
-    )
+
+    def manifest_versions(name: str) -> tuple[Version, ...]:
+        raw = manifest.get(name) or ()
+        return tuple(
+            version
+            for item in (raw if isinstance(raw, tuple) else (raw,))
+            if (version := parse_version(str(item))) is not None
+        )
+
+    lines = tuple(version[:2] for version in manifest_versions("breaking_lines"))
     notes: dict[str, ConceptNote] = {}
     for path in sorted((directory / "concepts").glob("*.md")):
         note = parse_note(path.read_text(encoding="utf-8"), fallback_title=path.stem)
@@ -252,6 +259,7 @@ def load_knowledge_graph(directory: Path = DEFAULT_KNOWLEDGE_DIR) -> KnowledgeGr
         notes=notes,
         min_version=parse_version(str(manifest.get("min_version") or "")),
         breaking_lines=tuple(sorted(lines)),
+        reviewed_releases=manifest_versions("reviewed_releases"),
     )
 
 
