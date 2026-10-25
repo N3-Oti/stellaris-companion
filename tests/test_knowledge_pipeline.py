@@ -530,3 +530,45 @@ def test_update_pins_the_configured_model_and_reports_it(
 
     assert calls and set(calls) == {"configured-model"}
     assert "Model: served-model" in summary.read_text(encoding="utf-8")
+
+
+def test_transient_provider_errors_are_retried(monkeypatch):
+    from backend.core.advisor_providers import AdvisorProviderError
+
+    waits: list[int] = []
+    monkeypatch.setattr(pipeline, "_sleep", waits.append)
+    attempts = {"count": 0}
+
+    class Flaky:
+        config = SimpleNamespace(model="m")
+
+        def generate(self, **_: object):
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise AdvisorProviderError("503 UNAVAILABLE.", code="PROVIDER_UNAVAILABLE")
+            return SimpleNamespace(text="{}", model="m")
+
+        def close(self) -> None:
+            pass
+
+    result = pipeline.ModelRecorder(Flaky()).generate(system_prompt="", user_prompt="")
+
+    assert result.model == "m"
+    assert waits == [30, 90]
+
+
+def test_billing_errors_are_not_retried(monkeypatch):
+    from backend.core.advisor_providers import AdvisorProviderError
+
+    waits: list[int] = []
+    monkeypatch.setattr(pipeline, "_sleep", waits.append)
+
+    class Billing:
+        config = SimpleNamespace(model="m")
+
+        def generate(self, **_: object):
+            raise AdvisorProviderError("402 RESOURCE_EXHAUSTED.", code="PROVIDER_BILLING_FAILED")
+
+    with pytest.raises(AdvisorProviderError):
+        pipeline.ModelRecorder(Billing()).generate(system_prompt="", user_prompt="")
+    assert waits == []

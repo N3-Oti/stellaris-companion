@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -419,6 +420,15 @@ def create_generator() -> Any:
     return generator
 
 
+# Provider error codes from backend/core/advisor_providers.py that a later attempt can fix.
+# Billing, authentication, and unknown-model errors stop immediately.
+TRANSIENT_PROVIDER_CODES = frozenset(
+    {"PROVIDER_UNAVAILABLE", "PROVIDER_TIMEOUT", "PROVIDER_RATE_LIMITED"}
+)
+RETRY_DELAYS_SECONDS = (30, 90, 180)
+_sleep = time.sleep
+
+
 class ModelRecorder:
     """Pin the configured model and record which models actually answered.
 
@@ -435,7 +445,17 @@ class ModelRecorder:
         return getattr(self._generator, "config", None)
 
     def generate(self, **kwargs: Any) -> Any:
-        result = self._generator.generate(model=getattr(self.config, "model", "") or None, **kwargs)
+        model = getattr(self.config, "model", "") or None
+        for delay in (*RETRY_DELAYS_SECONDS, None):
+            try:
+                result = self._generator.generate(model=model, **kwargs)
+                break
+            except Exception as error:
+                # The app deliberately makes one attempt; a daily job can wait out a spike.
+                if delay is None or getattr(error, "code", None) not in TRANSIENT_PROVIDER_CODES:
+                    raise
+                print(f"::warning::{error} Retrying in {delay} seconds.")
+                _sleep(delay)
         served = getattr(result, "model", None)
         if served and served not in self.served_models:
             self.served_models.append(served)
