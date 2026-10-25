@@ -10,11 +10,12 @@ raise ``verified_through``; a maintainer does that after checking the shipped ga
 See docs/knowledge-graph.md.
 
 Provider settings come from the environment, so no provider is fixed:
-    KNOWLEDGE_PROVIDER   gemini, openrouter, custom, ollama, or lm_studio (default: custom)
-    KNOWLEDGE_MODEL      model ID for that provider
-    KNOWLEDGE_BASE_URL   OpenAI-compatible base URL (custom/ollama/lm_studio)
+    KNOWLEDGE_PROVIDER   gemini, openrouter, custom, ollama, or lm_studio (required)
+    KNOWLEDGE_MODEL      model ID; required except for gemini, which defaults to the
+                         Advisor's GEMINI_FLASH_MODEL in backend/core/model_routing.py
+    KNOWLEDGE_BASE_URL   OpenAI-compatible base URL (custom; ollama and lm_studio and
+                         openrouter have defaults)
     KNOWLEDGE_API_KEY    API key for the provider
-In GitHub Actions the workflow defaults to GitHub Models with the job's GITHUB_TOKEN.
 
 Examples:
     python scripts/knowledge_pipeline.py check
@@ -53,9 +54,24 @@ PLAYER_LOCALES = ("en", "ja", "zh-Hans", "de", "fr", "es", "pt-BR")
 DEFAULT_CHUNK_CHARS = 12000
 MIN_QUOTE_CHARS = 20
 
-_TITLE_VERSION_PATTERN = re.compile(r"(?<![\d.])(\d+\.\d+(?:\.\d+)?)(?![\d.])")
-_RELEASE_WORDS = re.compile(r"\b(release[ds]?|update|patch|hotfix|notes)\b", re.IGNORECASE)
-_BETA_WORDS = re.compile(r"\b(beta|preview|preliminary)\b", re.IGNORECASE)
+# Stable announcements on the Steam feed start with the version, for example:
+#   Stellaris 4.5 "Cygnus" now available!          (release line)
+#   Stellaris 4.5.1 released (checksum 358e)        (hotfix)
+#   Stellaris 4.5.2 released [checksum 9776]
+#   Stellaris 4.4.6 hotfix released (fdde)
+#   Stellaris 4.4.5 patch released (2f57)
+#   Stellaris 4.0.10 Patch
+# Open betas use the same shape ("Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now
+# available!", "Stellaris 4.5 'Cygnus' Open Beta Update 4 (e6fd)"), and dev diaries or
+# teasers mention versions mid-title ("Willpower and the Stellaris 4.6 ... will be
+# released"), so a title must start with the version and carry no beta marker.
+_TITLE_VERSION_PATTERN = re.compile(r"^\s*Stellaris\s+v?(\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
+_RELEASE_WORDS = re.compile(r"\b(released|now available|now live|patch|hotfix)\b", re.IGNORECASE)
+_BETA_WORDS = re.compile(
+    r"\b(beta|preview|preliminary|dev diary|will be|coming|upcoming)\b", re.IGNORECASE
+)
+# Some Steam posts only summarize and link to the full notes on the Paradox forum.
+FORUM_ONLY_HINT_CHARS = 2000
 # Model-facing facts are present tense; change history confuses models and players.
 _HISTORY_WORDS = re.compile(
     r"\b(now|anymore|used to|no longer|previously|formerly|was changed|were changed|"
@@ -132,7 +148,7 @@ def find_stable_releases(items: list[dict[str, Any]]) -> list[ReleaseNote]:
     releases: dict[tuple[int, int, int], ReleaseNote] = {}
     for item in sorted(items, key=lambda entry: entry.get("date", 0)):
         title = str(item.get("title") or "")
-        match = _TITLE_VERSION_PATTERN.search(title)
+        match = _TITLE_VERSION_PATTERN.match(title)
         if not match or _BETA_WORDS.search(title) or not _RELEASE_WORDS.search(title):
             continue
         key = parse_version(match.group(1))
@@ -257,11 +273,23 @@ def create_generator() -> Any:
         ADVISOR_PROVIDER_GEMINI,
         AdvisorProviderConfig,
         create_advisor_generator,
+        normalize_advisor_provider,
     )
 
+    requested = (os.environ.get("KNOWLEDGE_PROVIDER") or "").strip()
+    model = (os.environ.get("KNOWLEDGE_MODEL") or "").strip()
+    provider = normalize_advisor_provider(requested)
+    if not requested or (
+        provider == ADVISOR_PROVIDER_GEMINI and requested.lower() != ADVISOR_PROVIDER_GEMINI
+    ):
+        raise SystemExit(
+            "Set KNOWLEDGE_PROVIDER to gemini, openrouter, custom, ollama, or lm_studio."
+        )
+    if provider != ADVISOR_PROVIDER_GEMINI and not model:
+        raise SystemExit(f"Set KNOWLEDGE_MODEL to a model ID offered by {provider}.")
     config = AdvisorProviderConfig.from_environment(
-        provider=os.environ.get("KNOWLEDGE_PROVIDER") or "custom",
-        model=os.environ.get("KNOWLEDGE_MODEL"),
+        provider=provider,
+        model=model or None,
         base_url=os.environ.get("KNOWLEDGE_BASE_URL"),
         advisor_api_key=os.environ.get("KNOWLEDGE_API_KEY"),
         google_api_key=os.environ.get("KNOWLEDGE_API_KEY"),
@@ -554,6 +582,11 @@ def render_summary(
         lines.append(
             f"- [ ] {key[0]}.{key[1]} is a new release line: decide whether it redesigns "
             "mechanics enough to add it to `breaking_lines` in `_manifest.md`."
+        )
+    if len(release.text) < FORUM_ONLY_HINT_CHARS or "forum" in release.text.lower():
+        lines.append(
+            "- [ ] The Steam post is short or points to the Paradox forum; compare the full "
+            "release notes there, which this pipeline does not fetch."
         )
     lines += ["", f"### Changed notes ({len(changed)})"]
     lines += [f"- {title}" for title in changed] or ["- None"]

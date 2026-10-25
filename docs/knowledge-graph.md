@@ -130,12 +130,16 @@ when an older release line is added to the graph.
 `scripts/knowledge_pipeline.py` drafts graph changes for new stable releases; a maintainer
 reviews them as a pull request.
 
-1. **Find releases.** `check` reads the Stellaris Steam news feed and lists stable release
-   announcements whose version is at or above `min_version` and not yet known to the graph
-   (as a fact's `since`, a note's `verified_through`, or `reviewed_releases`). Titles marked
-   beta, preview, or preliminary are skipped.
-2. **Propose facts.** `update` splits the release notes into excerpts small enough for free-tier
-   request limits and sends each with a catalog of note titles and current fact labels. The model
+1. **Find releases.** `check` calls Steam's `ISteamNews/GetNewsForApp/v2` for app 281990 with
+   `feeds=steam_community_announcements` and `maxlength=0` (full post bodies), and lists stable
+   release announcements whose version is at or above `min_version` and not yet known to the
+   graph (as a fact's `since`, a note's `verified_through`, or `reviewed_releases`).
+   Stable titles start with the version and say it is released, available, or a patch or
+   hotfix: `Stellaris 4.5 "Cygnus" now available!`, `Stellaris 4.5.1 released (checksum 358e)`,
+   `Stellaris 4.4.6 hotfix released (fdde)`, `Stellaris 4.4.5 patch released (2f57)`. Open betas
+   (`Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now available!`), dev diaries, and teasers that
+   mention a version mid-title are skipped.
+2. **Propose facts.** `update` splits the release notes into excerpts and sends each with a catalog of note titles and current fact labels. The model
    returns structured proposals: target note, label, present-tense fact, a verbatim quote, and an
    optional label of the fact it supersedes.
 3. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
@@ -147,7 +151,27 @@ reviews them as a pull request.
    appended to `reviewed_releases`, even when nothing changed, so it is not proposed again.
    `verified_through` is never raised by the pipeline.
 5. **Report.** A summary lists accepted facts with their quotes, rejected proposals with reasons,
-   and anything needing attention, such as a new release line that may belong in `breaking_lines`.
+   and anything needing attention, such as a new release line that may belong in `breaking_lines`,
+   or a short Steam post whose full notes are only on the Paradox forum (not fetched).
+
+### Choosing a model
+
+The pipeline uses the Advisor's provider adapters, so any provider the app supports works:
+
+| `KNOWLEDGE_PROVIDER` | `KNOWLEDGE_MODEL` | Other settings |
+| --- | --- | --- |
+| `gemini` | Optional; defaults to the Advisor's `GEMINI_FLASH_MODEL` (`backend/core/model_routing.py`) | `KNOWLEDGE_API_KEY` from Google AI Studio |
+| `openrouter` | Required | `KNOWLEDGE_API_KEY` |
+| `custom` | Required | `KNOWLEDGE_BASE_URL` (OpenAI-compatible) and usually `KNOWLEDGE_API_KEY` |
+| `ollama`, `lm_studio` | Required | Local server; not reachable from GitHub-hosted runners |
+
+No model ID is hard-coded in the pipeline or workflow. Gemini follows the model the Advisor
+already ships and keeps current; every other provider must name a model it actually offers.
+Free tiers change; check the provider's current limits (for Gemini, the project's rate-limit
+view in Google AI Studio). A run makes one request per excerpt plus one per new note.
+
+GitHub Models is not an option: GitHub retired it, including its inference API, on
+July 30, 2026.
 
 ### Running locally
 
@@ -169,14 +193,13 @@ KNOWLEDGE_PROVIDER=custom KNOWLEDGE_BASE_URL=https://openrouter.ai/api/v1 \
 unreviewed release, runs the knowledge tests, and opens a pull request from
 `knowledge/update-<version>`. It skips a release whose branch already exists.
 
-By default it calls [GitHub Models](https://docs.github.com/en/github-models) with the job's
-`GITHUB_TOKEN` (`models: read`), so no API key is required. Repository variables
-`KNOWLEDGE_PROVIDER`, `KNOWLEDGE_BASE_URL`, and `KNOWLEDGE_MODEL`, plus a `KNOWLEDGE_API_KEY`
-secret, switch it to another provider or model. Free GitHub Models requests are limited in
-size and count per day, which the excerpt splitting accounts for.
+The model provider comes from repository variables `KNOWLEDGE_PROVIDER`, `KNOWLEDGE_MODEL`,
+and `KNOWLEDGE_BASE_URL` and the `KNOWLEDGE_API_KEY` secret. Without `KNOWLEDGE_PROVIDER` the job
+only reports the unreviewed release as a notice and in the run summary.
 
 To enable it in a fork:
 
+- Add the variables and secret above under **Settings > Secrets and variables > Actions**.
 - Enable Actions for the fork; scheduled workflows are disabled in forks until then.
 - Allow **Settings > Actions > General > Allow GitHub Actions to create and approve pull
   requests**.

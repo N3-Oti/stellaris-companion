@@ -14,7 +14,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  models: read
 
 concurrency:
   group: knowledge-update
@@ -53,16 +52,24 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Report missing model provider
+        if: steps.release.outputs.version != '' && steps.release.outputs.skip != 'true' && vars.KNOWLEDGE_PROVIDER == ''
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          message="Stellaris $VERSION has not been reviewed. Set the KNOWLEDGE_PROVIDER variable and the KNOWLEDGE_API_KEY secret to draft it."
+          echo "::notice title=Knowledge update::$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Draft graph changes
         id: draft
-        if: steps.release.outputs.version != '' && steps.release.outputs.skip != 'true'
+        if: steps.release.outputs.version != '' && steps.release.outputs.skip != 'true' && vars.KNOWLEDGE_PROVIDER != ''
         env:
-          # Any supported provider can replace the GitHub Models defaults through
-          # repository variables and the KNOWLEDGE_API_KEY secret.
-          KNOWLEDGE_PROVIDER: ${{ vars.KNOWLEDGE_PROVIDER || 'custom' }}
-          KNOWLEDGE_BASE_URL: ${{ vars.KNOWLEDGE_BASE_URL || 'https://models.github.ai/inference' }}
-          KNOWLEDGE_MODEL: ${{ vars.KNOWLEDGE_MODEL || 'openai/gpt-4.1-mini' }}
-          KNOWLEDGE_API_KEY: ${{ secrets.KNOWLEDGE_API_KEY || github.token }}
+          # The repository owner chooses the provider; nothing is fixed to one vendor.
+          KNOWLEDGE_PROVIDER: ${{ vars.KNOWLEDGE_PROVIDER }}
+          KNOWLEDGE_MODEL: ${{ vars.KNOWLEDGE_MODEL }}
+          KNOWLEDGE_BASE_URL: ${{ vars.KNOWLEDGE_BASE_URL }}
+          KNOWLEDGE_API_KEY: ${{ secrets.KNOWLEDGE_API_KEY }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           python scripts/knowledge_pipeline.py update --version "$VERSION" --summary "$RUNNER_TEMP/summary.md"

@@ -19,34 +19,56 @@ RELEASE_TEXT = (
     "each month.[/list]"
 )
 
+# Titles as published on the Stellaris Steam announcements feed.
+REAL_TITLES = {
+    'Stellaris 4.5 "Cygnus" now available!': "4.5",
+    "Stellaris 4.5.1 released (checksum 358e)": "4.5.1",
+    "Stellaris 4.5.2 released [checksum 9776]": "4.5.2",
+    "Stellaris 4.4.6 hotfix released (fdde)": "4.4.6",
+    "Stellaris 4.4.5 patch released (2f57)": "4.4.5",
+    "Stellaris 4.3.6 patch released (checksum 6ccb)": "4.3.6",
+    "Stellaris 4.0.10 Patch": "4.0.10",
+    'Stellaris 4.4.4 "Pegasus" Open Beta (3bc0) now available!': None,
+    'Stellaris 4.4.5 "Pegasus" Early Open Beta (c22e) now available!': None,
+    "Stellaris 4.5 'Cygnus' Open Beta Update 4 (e6fd)": None,
+    "Stellaris Dev Diary #433 - 4.5 'Cygnus' Preliminary Release Notes": None,
+    "Stellaris Dev Diary #427 - We've Had One, Yes. But What About Second Open Beta?": None,
+    "Willpower and the Stellaris 4.6 'Corona Borealis' update will be released on Monday": None,
+}
+
 NEWS = {
     "appnews": {
         "newsitems": [
             {
-                "title": "Stellaris 4.5.2 'Cygnus' Update Released",
+                "title": "Stellaris 4.5.2 released [checksum 9776]",
                 "url": "https://x/452",
                 "contents": RELEASE_TEXT,
                 "date": 30,
             },
             {
-                "title": "Open Beta for Stellaris 4.6",
+                "title": 'Stellaris 4.6 "Corona Borealis" Open Beta (abcd) now available!',
                 "url": "https://x/beta",
                 "contents": "",
                 "date": 31,
             },
             {
-                "title": "Stellaris 4.5.1 Hotfix Released",
+                "title": "Stellaris 4.5.1 released (checksum 358e)",
                 "url": "https://x/451",
                 "contents": "",
                 "date": 20,
             },
             {
-                "title": "Stellaris 4.3.0 Released",
-                "url": "https://x/430",
+                "title": "Stellaris 4.3.6 patch released (checksum 6ccb)",
+                "url": "https://x/436",
                 "contents": "",
                 "date": 10,
             },
-            {"title": "Dev Diary #440", "url": "https://x/dd", "contents": "", "date": 32},
+            {
+                "title": "Stellaris Dev Diary #436 - Ideologies",
+                "url": "https://x/dd",
+                "contents": "",
+                "date": 32,
+            },
         ]
     }
 }
@@ -106,10 +128,52 @@ def test_clean_bbcode_keeps_readable_lists_and_headings():
     assert "[" not in text
 
 
-def test_finds_stable_releases_and_skips_betas_and_diaries():
+@pytest.mark.parametrize(("title", "version"), REAL_TITLES.items())
+def test_recognizes_published_stable_titles_only(title: str, version: str | None):
+    releases = pipeline.find_stable_releases([{"title": title, "contents": "", "date": 1}])
+
+    assert [release.version for release in releases] == ([version] if version else [])
+
+
+def test_finds_stable_releases_oldest_first():
     releases = pipeline.find_stable_releases(NEWS["appnews"]["newsitems"])
 
-    assert [release.version for release in releases] == ["4.3.0", "4.5.1", "4.5.2"]
+    assert [release.version for release in releases] == ["4.3.6", "4.5.1", "4.5.2"]
+
+
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [
+        ({}, "Set KNOWLEDGE_PROVIDER"),
+        ({"KNOWLEDGE_PROVIDER": "github_models"}, "Set KNOWLEDGE_PROVIDER"),
+        ({"KNOWLEDGE_PROVIDER": "openrouter"}, "Set KNOWLEDGE_MODEL"),
+    ],
+)
+def test_generator_requires_an_explicit_provider_and_model(monkeypatch, environment, message):
+    for name in (
+        "KNOWLEDGE_PROVIDER",
+        "KNOWLEDGE_MODEL",
+        "KNOWLEDGE_BASE_URL",
+        "KNOWLEDGE_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    with pytest.raises(SystemExit, match=message):
+        pipeline.create_generator()
+
+
+def test_gemini_defaults_to_the_advisor_model(monkeypatch):
+    from backend.core.model_routing import GEMINI_FLASH_MODEL
+
+    monkeypatch.setenv("KNOWLEDGE_PROVIDER", "gemini")
+    monkeypatch.delenv("KNOWLEDGE_MODEL", raising=False)
+    monkeypatch.setenv("KNOWLEDGE_API_KEY", "test-key")
+
+    generator = pipeline.create_generator()
+
+    assert generator.config.model == GEMINI_FLASH_MODEL
 
 
 def test_unreviewed_releases_skip_known_and_pre_graph_versions():
@@ -196,6 +260,7 @@ def test_update_writes_reviewable_graph_changes(knowledge_copy: Path, tmp_path: 
     report = summary.read_text(encoding="utf-8")
     assert "Mechanics knowledge update: Stellaris 4.5.2" in report
     assert "verified_through` was not raised" in report
+    assert "points to the Paradox forum" in report
 
     load_knowledge_graph.cache_clear()
     graph = load_knowledge_graph(knowledge_copy)
