@@ -785,6 +785,8 @@ def command_update(args: argparse.Namespace) -> int:
         return 0
     release = releases[0]
     build = _read_public_build(args.app_info)
+    from backend.core.advisor_providers import AdvisorProviderError
+
     generator = create_generator()
     try:
         proposals, problems = propose_facts(generator, release, graph, chunk_chars=args.chunk_chars)
@@ -807,6 +809,10 @@ def command_update(args: argparse.Namespace) -> int:
             load_knowledge_graph.cache_clear()
             updated = load_knowledge_graph(knowledge_dir)
             problems += integrity_problems(updated) if updated else ["Graph failed to load"]
+    except AdvisorProviderError as error:
+        # Billing, quota, and authentication failures need the owner's attention, not a retry.
+        print(f"::error title=Model provider::{error}")
+        return 1
     finally:
         generator.close()
     summary = render_summary(release, review, changed, problems, graph)

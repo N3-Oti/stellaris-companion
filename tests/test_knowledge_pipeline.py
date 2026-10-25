@@ -468,3 +468,30 @@ def test_update_records_the_build_once_nothing_else_is_pending(
     assert pipeline.recorded_public_build(knowledge_copy) is None
     update("4.5.3")
     assert pipeline.recorded_public_build(knowledge_copy) == "25664273"
+
+
+def test_provider_failure_is_reported_in_one_line(
+    knowledge_copy: Path, tmp_path: Path, monkeypatch, capsys
+):
+    from backend.core.advisor_providers import AdvisorProviderError
+
+    class BillingFailure(FakeGenerator):
+        def generate(self, **_: object):
+            raise AdvisorProviderError(
+                "402 RESOURCE_EXHAUSTED. Your prepayment credits are depleted.",
+                code="ADVISOR_PROVIDER_ERROR",
+            )
+
+    news_file = tmp_path / "news.json"
+    news_file.write_text(json.dumps(NEWS), encoding="utf-8")
+    monkeypatch.setattr(pipeline, "create_generator", lambda: BillingFailure([]))
+
+    code = pipeline.main(
+        ["--knowledge-dir", str(knowledge_copy), "--news-file", str(news_file), "update"]
+    )
+
+    assert code == 1
+    assert "::error title=Model provider::402 RESOURCE_EXHAUSTED" in capsys.readouterr().out
+    assert "reviewed_releases: [4.4.6, 4.5, 4.5.1]\n" in (
+        knowledge_copy / "_manifest.md"
+    ).read_text(encoding="utf-8")
