@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -31,8 +32,17 @@ DEFAULT_SNAPSHOTS_DIR = DEFAULT_PATCHES_DIR / "snapshots"
 # serve as its baseline. Add future release lines here only after a breaking audit.
 BREAKING_SNAPSHOT_BOUNDARIES = frozenset({(4, 5)})
 
+# Release-line deltas each correct a stale belief, so they bypass topic selection
+# while they stay small. Larger delta packs fall back to keyword selection.
+DELTA_ALWAYS_INCLUDE_CHARS = 8000
+MAX_INDEX_LABELS = 6
+
 _VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 _MARKDOWN_SECTION_PATTERN = re.compile(r"(?m)^(#{1,3})\s+(.+?)\s*$")
+_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+_KEYWORDS_COMMENT_PATTERN = re.compile(r"<!--\s*keywords\s*\n(.*?)-->", re.DOTALL | re.IGNORECASE)
+_BOLD_LABEL_PATTERN = re.compile(r"(?m)^\s*[*-]\s+\*\*(.+?)\*\*")
+_LATIN_WORD_PATTERN = re.compile(r"[0-9a-z\u00c0-\u024f]+")
 _SEARCH_ALIASES: dict[str, tuple[str, ...]] = {
     "pop": ("population", "workforce", "colony"),
     "growth": ("population", "workforce", "colony"),
@@ -78,6 +88,10 @@ class GameKnowledgeContext:
     loaded_through: str | None
     status: KnowledgeStatus
     content: str | None
+    # Lower-cased section title -> maintainer keywords in every language.
+    section_keywords: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Offset in ``content`` where release-line deltas begin, if any.
+    delta_offset: int | None = None
 
 
 def parse_version(version: str) -> tuple[int, int, int] | None:
@@ -101,13 +115,14 @@ def extract_version(version: str) -> str | None:
 
 def clean_knowledge_content(content: str) -> str:
     """Remove maintainer comments while retaining model-useful Markdown structure."""
-    cleaned = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    cleaned = _COMMENT_PATTERN.sub("", content)
     lines = [line.rstrip() for line in cleaned.splitlines()]
     while lines and not lines[0].strip():
         lines.pop(0)
     while lines and not lines[-1].strip():
         lines.pop()
-    return "\n".join(lines)
+    # Removed comments can leave stacked blank lines; one is enough for Markdown.
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
 
 def list_versioned_markdown(directory: Path) -> list[str]:
@@ -123,18 +138,63 @@ def list_versioned_markdown(directory: Path) -> list[str]:
     return [version for _, version in versions]
 
 
-def _load_file(version: str, directory: Path) -> str | None:
+def parse_section_keywords(text: str) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Map each section title to its maintainer-authored keywords by language.
+
+    Keywords live in a comment inside the section, one language per line::
+
+        <!-- keywords
+        ja: ポップ, 人口
+        de: Bevölkerung
+        -->
+    """
+    without_notes = _COMMENT_PATTERN.sub(
+        lambda match: match.group(0) if _KEYWORDS_COMMENT_PATTERN.fullmatch(match.group(0)) else "",
+        text,
+    )
+    headings = list(_MARKDOWN_SECTION_PATTERN.finditer(without_notes))
+    keywords_by_section: dict[str, dict[str, tuple[str, ...]]] = {}
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(without_notes)
+        languages: dict[str, tuple[str, ...]] = {}
+        for block in _KEYWORDS_COMMENT_PATTERN.finditer(without_notes, heading.end(), end):
+            for line in block.group(1).splitlines():
+                language, separator, values = line.partition(":")
+                terms = tuple(value.strip() for value in values.split(",") if value.strip())
+                if separator and terms:
+                    languages[language.strip()] = languages.get(language.strip(), ()) + terms
+        if languages:
+            keywords_by_section[heading.group(2).strip()] = languages
+    return keywords_by_section
+
+
+def _load_document(version: str, directory: Path) -> tuple[str, dict[str, tuple[str, ...]]] | None:
     path = directory / f"{version}.md"
     if not path.exists():
         return None
     try:
-        return clean_knowledge_content(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
     except OSError:
         return None
+    keywords = {
+        title.lower(): tuple(term for terms in languages.values() for term in terms)
+        for title, languages in parse_section_keywords(raw).items()
+    }
+    return clean_knowledge_content(raw), keywords
+
+
+def _load_file(version: str, directory: Path) -> str | None:
+    document = _load_document(version, directory)
+    return document[0] if document else None
+
+
+def _has_non_latin_letters(text: str) -> bool:
+    """Detect scripts (e.g. Japanese, Chinese) that are matched by substring, not words."""
+    return any(char.isalpha() and ord(char) > 0x024F for char in text)
 
 
 def _search_terms(text: str) -> set[str]:
-    terms = set(re.findall(r"[a-z0-9]+", text.lower()))
+    terms = set(_LATIN_WORD_PATTERN.findall(text.lower()))
     singular_terms = {
         f"{term[:-3]}y" if term.endswith("ies") else term[:-1]
         for term in terms
@@ -146,36 +206,49 @@ def _search_terms(text: str) -> set[str]:
     return terms
 
 
-def _select_relevant_sections(content: str, topics: str, *, limit: int) -> str:
-    """Keep safety baselines plus the few mechanics sections relevant to a request."""
-    headings = list(_MARKDOWN_SECTION_PATTERN.finditer(content))
-    if not headings:
-        return content
+def _keyword_matches(keywords: tuple[str, ...], topic_terms: set[str], topic_text: str) -> set[str]:
+    matched: set[str] = set()
+    for keyword in keywords:
+        normalized = keyword.lower()
+        if _has_non_latin_letters(normalized):
+            if normalized in topic_text:
+                matched.add(normalized)
+            continue
+        words = _LATIN_WORD_PATTERN.findall(normalized)
+        if words and all(
+            word in topic_terms
+            or (len(word) > 3 and word.endswith("s") and word[:-1] in topic_terms)
+            for word in words
+        ):
+            matched.update(words)
+    return matched
 
+
+def _topic_candidates(
+    headings: list[re.Match[str]],
+    topics: str,
+    *,
+    skip: set[int],
+    section_keywords: Mapping[str, tuple[str, ...]],
+) -> list[tuple[int, int, int, set[str]]]:
     topic_terms = _search_terms(topics)
-    selected: set[int] = set()
+    topic_text = topics.lower()
     candidates: list[tuple[int, int, int, set[str]]] = []
     document_index = -1
-
     for index, match in enumerate(headings):
         if match.group(1) == "#":
             document_index += 1
-        title = match.group(2).strip()
-        normalized_title = title.lower()
-        if (
-            "critical 4.x baseline" in normalized_title
-            or "interpretation guardrails" in normalized_title
-        ):
-            selected.add(index)
+        if index in skip:
             continue
-
-        matched_terms = topic_terms & _search_terms(title)
-        score = len(matched_terms)
-        if score:
-            candidates.append((score, document_index, index, matched_terms))
+        title = match.group(2).strip()
+        matched_terms = (topic_terms & _search_terms(title)) | _keyword_matches(
+            section_keywords.get(title.lower(), ()), topic_terms, topic_text
+        )
+        if matched_terms:
+            candidates.append((len(matched_terms), document_index, index, matched_terms))
 
     # A newer overlay with the same topic takes precedence over an older snapshot.
-    current_candidates = [
+    return [
         candidate
         for candidate in candidates
         if not any(
@@ -183,14 +256,77 @@ def _select_relevant_sections(content: str, topics: str, *, limit: int) -> str:
             for _, newer_document, _, newer_terms in candidates
         )
     ]
-    current_candidates.sort(key=lambda item: (-item[0], -item[1], -item[2]))
-    selected.update(index for _, _, index, _ in current_candidates[:limit])
 
-    sections: list[str] = []
-    for index in sorted(selected):
+
+def _section_index_line(title: str, body: str) -> str | None:
+    labels = [label.strip().rstrip(":") for label in _BOLD_LABEL_PATTERN.findall(body)]
+    if not labels:
+        return None
+    shown = ", ".join(labels[:MAX_INDEX_LABELS])
+    more = ", ..." if len(labels) > MAX_INDEX_LABELS else ""
+    return f"- {title}: {shown}{more}"
+
+
+def _select_relevant_sections(
+    content: str,
+    topics: str,
+    *,
+    limit: int,
+    section_keywords: Mapping[str, tuple[str, ...]] | None = None,
+    delta_offset: int | None = None,
+    fallback_topics: str | None = None,
+) -> str:
+    """Keep safety baselines plus the few mechanics sections relevant to a request.
+
+    Small release-line deltas are always kept. When neither the request nor the
+    recent conversation matches a section, an index of the omitted sections tells
+    the model which areas have version-specific rules instead of silently dropping
+    them.
+    """
+    headings = list(_MARKDOWN_SECTION_PATTERN.finditer(content))
+    if not headings:
+        return content
+
+    keywords = section_keywords or {}
+    keep_deltas = (
+        delta_offset is not None and len(content) - delta_offset <= DELTA_ALWAYS_INCLUDE_CHARS
+    )
+    selected: set[int] = set()
+    for index, match in enumerate(headings):
+        normalized_title = match.group(2).strip().lower()
+        if (keep_deltas and match.start() >= (delta_offset or 0)) or (
+            "critical 4.x baseline" in normalized_title
+            or "interpretation guardrails" in normalized_title
+        ):
+            selected.add(index)
+
+    candidates = _topic_candidates(headings, topics, skip=selected, section_keywords=keywords)
+    if not candidates and fallback_topics:
+        candidates = _topic_candidates(
+            headings, fallback_topics, skip=selected, section_keywords=keywords
+        )
+    candidates.sort(key=lambda item: (-item[0], -item[1], -item[2]))
+    selected.update(index for _, _, index, _ in candidates[:limit])
+
+    def section_body(index: int) -> str:
         start = headings[index].start()
         end = headings[index + 1].start() if index + 1 < len(headings) else len(content)
-        sections.append(content[start:end].strip())
+        return content[start:end].strip()
+
+    sections = [section_body(index) for index in sorted(selected)]
+    if not candidates:
+        index_lines = [
+            line
+            for index, match in enumerate(headings)
+            if index not in selected
+            and (line := _section_index_line(match.group(2).strip(), section_body(index)))
+        ]
+        if index_lines:
+            sections.append(
+                "Other verified mechanics areas for this version (details omitted; when a "
+                "request touches one, do not assert older-version rules for it):\n"
+                + "\n".join(index_lines)
+            )
     return "\n\n".join(sections)
 
 
@@ -262,6 +398,8 @@ def load_game_knowledge(
     content_parts = []
     loaded_version = None
     snapshot_key: tuple[int, int, int] | None = None
+    section_keywords: dict[str, tuple[str, ...]] = {}
+    delta_offset: int | None = 0 if notes_only_line else None
 
     if prefer_snapshot and not notes_only_line:
         eligible = [
@@ -271,10 +409,12 @@ def load_game_knowledge(
         ]
         if eligible:
             snapshot_key, snapshot_version = eligible[-1]
-            content = _load_file(snapshot_version, snapshots_dir)
-            if content:
-                content_parts.append(content)
+            document = _load_document(snapshot_version, snapshots_dir)
+            if document and document[0]:
+                content_parts.append(document[0])
+                section_keywords.update(document[1])
                 loaded_version = snapshot_version
+                delta_offset = len(document[0]) + 2
             else:
                 snapshot_key = None
 
@@ -286,9 +426,11 @@ def load_game_knowledge(
             continue
         if snapshot_key is not None and patch_key <= snapshot_key:
             continue
-        content = _load_file(patch_version, patches_dir)
-        if content:
-            content_parts.append(content)
+        document = _load_document(patch_version, patches_dir)
+        if document and document[0]:
+            content_parts.append(document[0])
+            for title, terms in document[1].items():
+                section_keywords[title] = section_keywords.get(title, ()) + terms
             loaded_version = patch_version
 
     status = "exact" if loaded_version == target_version and not notes_only_line else "partial"
@@ -298,6 +440,8 @@ def load_game_knowledge(
         loaded_version,
         status if content_parts else "unavailable",
         "\n\n".join(content_parts) if content_parts else None,
+        section_keywords,
+        delta_offset,
     )
 
 
@@ -306,11 +450,16 @@ def build_game_knowledge_prompt(
     *,
     purpose: KnowledgePurpose,
     topics: str | None = None,
+    fallback_topics: str | None = None,
     max_topic_sections: int = 3,
     patches_dir: Path = DEFAULT_PATCHES_DIR,
     snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
 ) -> str:
-    """Build shared evidence rules and verified mechanics for a model system prompt."""
+    """Build shared evidence rules and verified mechanics for a model system prompt.
+
+    ``fallback_topics`` (such as recent questions) is consulted only when ``topics``
+    matches no section, so follow-up questions keep their earlier subject.
+    """
     knowledge = load_game_knowledge(
         version,
         patches_dir=patches_dir,
@@ -346,6 +495,9 @@ def build_game_knowledge_prompt(
             knowledge_content,
             topics,
             limit=max(0, max_topic_sections),
+            section_keywords=knowledge.section_keywords,
+            delta_offset=knowledge.delta_offset,
+            fallback_topics=fallback_topics,
         )
 
     if knowledge_content and knowledge.status == "exact":

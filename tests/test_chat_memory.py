@@ -110,6 +110,24 @@ def test_recent_conversation_budget_prefers_latest_turns() -> None:
     assert "oldest-turn-question" not in prompt
 
 
+def test_recent_questions_returns_latest_without_creating_sessions() -> None:
+    manager = ConversationManager(max_turns=5, timeout_minutes=60)
+
+    assert manager.recent_questions("missing") == []
+    assert manager._sessions == {}
+
+    for index in range(3):
+        manager.record_turn(
+            session_key="scope-4",
+            question=f"question-{index}",
+            answer="answer",
+            game_date="2200.01.01",
+        )
+
+    assert manager.recent_questions("scope-4") == ["question-1", "question-2"]
+    assert manager.recent_questions("scope-4", limit=0) == []
+
+
 def test_save_scoped_advisor_memory_persists_round_trip(tmp_path: Path) -> None:
     """Advisor memory summary should persist and update by save_id."""
     db = GameDatabase(db_path=tmp_path / "memory.db")

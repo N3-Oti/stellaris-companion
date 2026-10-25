@@ -1152,6 +1152,10 @@ class Companion:
                 str(captured_meta["version"]),
                 purpose="advisor",
                 topics=cleaned_question,
+                # Follow-ups such as "what about that?" keep the earlier subject.
+                fallback_topics="\n".join(
+                    self._conversations.recent_questions(language_scoped_session_key)
+                ),
             )
             if isinstance(captured_meta, dict) and captured_meta.get("version")
             else ""

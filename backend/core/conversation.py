@@ -158,6 +158,14 @@ class ConversationManager:
             session.last_active = self._now()
             return session
 
+    def recent_questions(self, session_key: str, *, limit: int = 2) -> list[str]:
+        """Return the latest questions in a session without refreshing or creating it."""
+        with self._lock:
+            session = self._sessions.get(session_key)
+            if session is None or limit <= 0:
+                return []
+            return [turn.question for turn in session.history[-limit:]]
+
     def clear(self, session_key: str) -> None:
         """Remove a session and its history.
 

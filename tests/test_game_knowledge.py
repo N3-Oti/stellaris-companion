@@ -1,10 +1,18 @@
 from pathlib import Path
 
 from stellaris_companion.game_knowledge import (
+    DEFAULT_PATCHES_DIR,
+    DEFAULT_SNAPSHOTS_DIR,
+    DELTA_ALWAYS_INCLUDE_CHARS,
     _find_default_patches_dir,
     build_game_knowledge_prompt,
+    list_versioned_markdown,
     load_game_knowledge,
+    parse_section_keywords,
+    parse_version,
 )
+
+PLAYER_LOCALES = ("ja", "zh-Hans", "de", "fr", "es", "pt-BR")
 
 
 def test_patch_resources_resolve_from_pyinstaller_sibling_layout(tmp_path: Path):
@@ -177,12 +185,13 @@ def test_topic_focused_prompt_does_not_misreport_available_older_coverage():
         topics="What should I prioritize next?",
     )
 
-    assert "Verified mechanics are available through 4.3.5" in prompt
-    assert "no topic-specific mechanics section was needed" in prompt
+    assert "Verified mechanics for Cetus v4.3.5" in prompt
+    assert "Other verified mechanics areas for this version" in prompt
+    assert "- Naval Capacity & Fleet Scale: Anchorages" in prompt
     assert "No verified mechanics pack covers" not in prompt
 
 
-def test_topic_focused_cygnus_prompt_preserves_partial_coverage_and_filters_sections():
+def test_topic_focused_cygnus_prompt_keeps_small_release_note_deltas():
     prompt = build_game_knowledge_prompt(
         "Cygnus v4.5.1",
         purpose="advisor",
@@ -192,6 +201,138 @@ def test_topic_focused_cygnus_prompt_preserves_partial_coverage_and_filters_sect
     assert "Only the listed mechanics changes are verified through 4.5.1" in prompt
     assert "rather than splitting into separate groups" in prompt
     assert "Do not carry forward older-version rules" in prompt
+    # Each delta corrects a stale belief, so a small pack is never trimmed by topic.
+    assert "Building a Branch Office costs 75 Influence" in prompt
+    assert "Synaptic Lathe that Nomads build" in prompt
     assert "A normal Anchorage adds 5 Naval Capacity" not in prompt
-    assert "Building a Branch Office costs 75 Influence" not in prompt
     assert "Treat these as the current baseline" not in prompt
+
+
+def test_japanese_cygnus_question_receives_release_note_deltas():
+    prompt = build_game_knowledge_prompt(
+        "Cygnus v4.5.1",
+        purpose="advisor",
+        topics="ポップの成長を早めるには？",
+    )
+
+    assert "rather than splitting into separate groups" in prompt
+    assert "Do not carry forward older-version rules" in prompt
+    assert "no topic-specific mechanics section was needed" not in prompt
+
+
+def _write_large_delta_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    patches_dir = tmp_path / "patches"
+    snapshots_dir = patches_dir / "snapshots"
+    snapshots_dir.mkdir(parents=True)
+    (snapshots_dir / "9.0.md").write_text(
+        "# Snapshot\n\n## Critical 4.x Baseline\n* **Base:** Base rule.\n\n"
+        "## Naval Capacity\n* **Old Anchorage:** Snapshot anchorage rule.\n",
+        encoding="utf-8",
+    )
+    filler = "* **Filler:** " + "x" * DELTA_ALWAYS_INCLUDE_CHARS + "\n"
+    (patches_dir / "9.0.1.md").write_text(
+        "# Overlay\n\n## Naval Changes\n<!-- keywords\nja: 停泊所\n-->\n"
+        "* **New Anchorage:** Overlay anchorage rule.\n\n"
+        f"## Exploration Changes\n{filler}",
+        encoding="utf-8",
+    )
+    return patches_dir, snapshots_dir
+
+
+def test_large_delta_pack_is_still_selected_by_topic(tmp_path: Path):
+    patches_dir, snapshots_dir = _write_large_delta_fixture(tmp_path)
+
+    prompt = build_game_knowledge_prompt(
+        "9.0.1",
+        purpose="advisor",
+        topics="停泊所はいくつ必要？",
+        patches_dir=patches_dir,
+        snapshots_dir=snapshots_dir,
+    )
+
+    assert "Overlay anchorage rule" in prompt
+    assert "Base rule" in prompt
+    assert "x" * 100 not in prompt
+
+
+def test_japanese_question_selects_snapshot_section_by_keyword():
+    prompt = build_game_knowledge_prompt(
+        "Pegasus v4.4.6",
+        purpose="advisor",
+        topics="停泊所を増やしてから艦隊を拡大すべき？",
+    )
+
+    assert "A normal Anchorage adds 5 Naval Capacity" in prompt
+    assert "## Critical 4.x Baseline" in prompt
+    assert "Operational Reserves start with 15,000 capacity" not in prompt
+    assert "Other verified mechanics areas" not in prompt
+
+
+def test_unmatched_question_lists_omitted_sections_instead_of_full_snapshot():
+    prompt = build_game_knowledge_prompt(
+        "Pegasus v4.4.6",
+        purpose="advisor",
+        topics="次は何を優先すべき？",
+    )
+
+    assert "## Critical 4.x Baseline" in prompt
+    assert "Other verified mechanics areas for this version" in prompt
+    assert "- Naval Capacity & Fleets: Fleet Scale, Anchorages" in prompt
+    assert "A normal Anchorage adds 5 Naval Capacity" not in prompt
+
+
+def test_follow_up_question_uses_recent_topics_only_when_unmatched():
+    follow_up = build_game_knowledge_prompt(
+        "Pegasus v4.4.6",
+        purpose="advisor",
+        topics="それって具体的にどういうこと？",
+        fallback_topics="停泊所を増やすべき？",
+    )
+    new_subject = build_game_knowledge_prompt(
+        "Pegasus v4.4.6",
+        purpose="advisor",
+        topics="遊牧帝国の方舟はどう使う？",
+        fallback_topics="停泊所を増やすべき？",
+    )
+
+    assert "A normal Anchorage adds 5 Naval Capacity" in follow_up
+    assert "Arkships have inherent 40% habitability" in new_subject
+    assert "A normal Anchorage adds 5 Naval Capacity" not in new_subject
+
+
+def test_keyword_comments_never_reach_the_model():
+    knowledge = load_game_knowledge("Cygnus v4.5.1")
+    snapshot = load_game_knowledge("Pegasus v4.4.6")
+
+    for content in (knowledge.content or "", snapshot.content or ""):
+        assert "keywords" not in content
+        assert "ja:" not in content
+        assert "\n\n\n" not in content
+
+
+def test_current_knowledge_sections_have_keywords_for_every_player_locale():
+    snapshot_versions = list_versioned_markdown(DEFAULT_SNAPSHOTS_DIR)
+    newest_snapshot = snapshot_versions[-1]
+    newest_key = parse_version(newest_snapshot)
+    current_files = [DEFAULT_SNAPSHOTS_DIR / f"{newest_snapshot}.md"] + [
+        DEFAULT_PATCHES_DIR / f"{version}.md"
+        for version in list_versioned_markdown(DEFAULT_PATCHES_DIR)
+        if (key := parse_version(version)) is not None
+        and newest_key is not None
+        and key > newest_key
+    ]
+
+    for path in current_files:
+        text = path.read_text(encoding="utf-8")
+        keywords = parse_section_keywords(text)
+        for section in text.split("\n#")[1:]:
+            title = section.lstrip("#").splitlines()[0].strip()
+            if "**" not in section.split("\n#")[0] or title in {
+                "Critical 4.x Baseline",
+                "Interpretation Guardrails",
+            }:
+                continue
+            if title not in keywords:
+                raise AssertionError(f"{path.name}: '{title}' has no keywords")
+            missing = [locale for locale in PLAYER_LOCALES if not keywords[title].get(locale)]
+            assert not missing, f"{path.name}: '{title}' lacks keywords for {missing}"

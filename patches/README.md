@@ -41,6 +41,34 @@ by a maintainer for substantive correctness, allowing normal variation in wordin
 
 Source and coverage decisions for each stable snapshot live in `patches/audits/`.
 
+## Topic Selection and Keywords
+
+Advisor prompts keep the critical baseline and guardrails, then add the few sections that match
+the question. Small release-line deltas (overlays newer than the snapshot, or a notes-only pack)
+are always included because each one corrects a stale belief. When nothing matches, the earlier
+questions in the conversation are tried; failing that, the prompt lists the omitted sections so
+the model knows which areas have version-specific rules.
+
+Section titles are English, so every topic section carries keywords for the app's player
+languages in a comment directly under its heading. Comments never reach the model:
+
+```markdown
+## Naval Capacity & Fleets
+<!-- keywords
+en: naval capacity, command limit, anchorage
+ja: 艦隊上限, 停泊所
+zh-Hans: 海军容量, 锚地
+de: Flottenkapazität
+fr: capacité navale
+es: capacidad naval
+pt-BR: capacidade naval
+-->
+```
+
+Latin-script keywords match whole words (all words of a phrase must appear); Japanese and Chinese
+keywords match as substrings, so avoid very short or generic terms. `tests/test_game_knowledge.py`
+requires keywords for every locale in the newest snapshot and in each newer release-note pack.
+
 Before shipping, run `tests/test_game_knowledge.py` and record cross-provider responses with
 `scripts/experiments/eval_game_knowledge.py` for human review. Test stale premises that a model
 with an older knowledge cutoff is likely to answer confidently but incorrectly.
