@@ -99,7 +99,7 @@ _LAUNCH_WORDS = re.compile(r"\b(available now|is available|now available|out now
 FORUM_ONLY_HINT_CHARS = 2000
 # Model-facing facts are present tense; change history confuses models and players.
 _HISTORY_WORDS = re.compile(
-    r"\b(now|anymore|instead|used to|no longer|previously|formerly|was changed|were changed|"
+    r"\b(now|anymore|instead|fixed|used to|no longer|previously|formerly|was changed|were changed|"
     r"has been|have been|changed|increased|decreased|reduced|patch(?:es|ed)?|"
     r"hotfix(?:es)?)\b",
     re.IGNORECASE,
@@ -146,6 +146,15 @@ class ReleaseAnalysis(BaseModel):
     )
 
 
+# Release-note sections whose lines never change play.
+_NON_GAMEPLAY_SECTION = re.compile(
+    r"(?:modding|ui|ux|ui/ux|user interface|graphics|art|audio|music|sound|localisation|"
+    r"localization|stability|performance|stability/performance|stability & performance|"
+    r"crash fixes)",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class NumberedExcerpt:
     """Release-note text with numbered change lines, plus the text of each number."""
@@ -158,7 +167,8 @@ def number_release_lines(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> lis
     """Number each change line so every one can be accounted for, split into excerpts.
 
     Bullets are the change lines when they carry most of a post; otherwise every line is. Short
-    unnumbered lines are treated as section headings and repeated at each excerpt start.
+    unnumbered lines are treated as section headings and repeated at each excerpt start. Lines
+    under sections that never change play (modding, UI, graphics, stability) are left out.
     """
     raw = [line.strip() for line in text.splitlines() if line.strip()]
     # Prose-style announcements carry their changes in paragraphs, not bullets.
@@ -172,6 +182,8 @@ def number_release_lines(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> lis
     number = 0
     for line in raw:
         is_change = line.startswith("- ") if has_bullets else True
+        if is_change and heading and _NON_GAMEPLAY_SECTION.fullmatch(heading):
+            continue
         if is_change:
             number += 1
             content = line[2:].strip() if line.startswith("- ") else line
@@ -181,6 +193,8 @@ def number_release_lines(text: str, max_chars: int = DEFAULT_CHUNK_CHARS) -> lis
             entry = line
             if len(line) <= 80 and not line.endswith((".", "!", "?", ":")):
                 heading = line
+                if _NON_GAMEPLAY_SECTION.fullmatch(heading):
+                    continue
         if numbered and size + len(entry) > max_chars:
             excerpts.append(NumberedExcerpt("\n".join(entries), numbered))
             entries, numbered, size = [], {}, 0
@@ -408,9 +422,10 @@ Make a fact for every line that changes how the game plays:
 - fixes that change a mechanic's actual effect, such as a bonus that starts applying,
   scales differently, or targets different pops.
 Skip only lines that change nothing in play: crash, performance, and stability fixes;
-tooltip, text, naming, UI, icon, and graphics changes; localisation; modding and script
-fields. When unsure, make a fact: a reviewer removes extras, but an omission is never
-noticed.
+tooltip, text, naming, UI, menu, map display, color, icon, and graphics changes;
+localisation; modding and script fields. Also skip a line when its fact could only say that
+something works, works correctly, or is rebalanced, without stating what it does. When
+unsure otherwise, make a fact: a reviewer removes extras, but an omission is never noticed.
 
 For each fact:
 - "fact" states how the game works in the present tense, with its scope and conditions
@@ -433,21 +448,42 @@ Bugfix
 L4: Fixed Ring Worlds ignoring the Habitability of the species that lives there.
 L5: Fixed a crash when opening the Situation Log.
 L6: Fixed a typo in the Gene Clinic tooltip.
+L7: Fixed the Gene Clinic not working.
+L8: Fixed some tiers of Gene Clinic being cheaper than intended.
+Improvements
+L9: Science Ships now show anomalies in the Outliner alongside their survey button.
+L10: Forming a Pact now tells you what your Envoys gain.
+L11: Robotic empires now use the correct ship graphics.
 Features
-L7: Added the Orbital Shipyard building, which lets Habitats build ships.
-Modding
-L8: Added the is_ringworld trigger.
+L12: Added the Orbital Shipyard building, which lets Habitats build ships.
 Answer:
 {"facts": [
  {"lines": [1], "note": "Wars & Diplomacy", "new_note": false, "label": "Defensive Pact Upkeep",
   "fact": "Each Defensive Pact costs 2 Influence per month.", "supersedes_label": "Defensive Pact Upkeep", "related": []},
- {"lines": [2, 3], "note": "Civics", "new_note": false, "label": "Agrarian Idyll",
+ {"lines": [2, 3], "note": "Workforce", "new_note": false, "label": "Agrarian Idyll",
   "fact": "Agrarian Idyll applies its Amenities bonus only to Farmer jobs, and its Farmers produce +1 Unity each.", "supersedes_label": null, "related": []},
- {"lines": [4], "note": "Megastructures", "new_note": false, "label": "Ring World Habitability",
+ {"lines": [4], "note": "Colonies", "new_note": false, "label": "Ring World Habitability",
   "fact": "Ring Worlds use the Habitability of the species that lives there.", "supersedes_label": null, "related": []},
- {"lines": [7], "note": "Habitat Shipyards", "new_note": true, "label": "Orbital Shipyard",
+ {"lines": [12], "note": "Habitat Shipyards", "new_note": true, "label": "Orbital Shipyard",
   "fact": "The Orbital Shipyard building lets Habitats build ships.", "supersedes_label": null, "related": ["Naval Capacity"]}],
- "skipped_lines": [5, 6, 8]}"""
+ "skipped_lines": [5, 6, 7, 8, 9, 10, 11]}
+Lines 7 and 8 are skipped because their facts could only say the Gene Clinic works or costs
+what was intended; lines 9 to 11 change only what is shown."""
+
+# Lines that read as display-only or as a bare "it works now" fix are not re-asked about;
+# the first pass may still cite them.
+_DISPLAY_ONLY = re.compile(
+    r"\b(tooltips?|typo|icons?|menus?|buttons?|outliner|panel|window|shows?|shown|displays?|"
+    r"tells you|describ\w*|named|renamed|graphics?|graphical|flags?|messages?|notified|"
+    r"notifications?|not working|than intended)\b",
+    re.IGNORECASE,
+)
+
+RECHECK_PROMPT = """A first pass skipped these numbered lines. Look at each again: make a fact
+for every line that changes rules, numbers, costs, eligibility, availability, AI behavior,
+or which pops or empires an effect applies to, including fixes that change what actually
+happens in play. Keep skipping lines that change only what is shown, text, or crashes, and
+fixes whose fact could only say something works."""
 
 FOLLOW_UP_PROMPT = """These numbered lines from the same release notes were not accounted for.
 Classify each one: cite it in a fact, or list it in skipped_lines."""
@@ -615,6 +651,27 @@ def propose_facts(
                 skipped |= set(follow_up.skipped_lines)  # type: ignore[attr-defined]
                 covered = skipped | {number for fact in facts for number in fact.lines}
                 missing = [number for number in excerpt.lines if number not in covered]
+            # Weaker models are sometimes too cautious; give skipped lines a second look.
+            cited = {number for fact in facts for number in fact.lines}
+            second_look = [
+                number
+                for number in sorted(skipped)
+                if number not in cited and not _DISPLAY_ONLY.search(excerpt.lines[number])
+            ]
+            if second_look:
+                recheck = request_json(
+                    generator,
+                    f"{ANALYSIS_SYSTEM_PROMPT}\n\n{RECHECK_PROMPT}",
+                    header
+                    + "\n".join(f"L{number}: {excerpt.lines[number]}" for number in second_look)
+                    + notes,
+                    ReleaseAnalysis,
+                )
+                facts.extend(
+                    fact
+                    for fact in recheck.facts  # type: ignore[attr-defined]
+                    if fact.lines and not set(fact.lines) & cited
+                )
             if missing:
                 problems.append(
                     "Lines never classified by the model: "
@@ -624,7 +681,58 @@ def propose_facts(
             problems.append(f"Excerpt {index}: unreadable model response ({error})")
             continue
         proposals.extend(_cited_lines(facts, excerpt.lines))
+    try:
+        proposals = rewrite_change_history(generator, proposals)
+    except (ValidationError, ValueError) as error:
+        problems.append(f"Rewriting change-history wording failed ({error})")
     return proposals, problems
+
+
+class RewrittenFact(BaseModel):
+    index: int
+    label: str
+    fact: str
+
+
+class Rewrites(BaseModel):
+    facts: list[RewrittenFact]
+
+
+REWRITE_PROMPT = """Rewrite each Stellaris knowledge-base fact so it states how the game works,
+in the present tense, without change-history words ("now", "no longer", "instead",
+"anymore", "used to", "previously", "changed", "increased", "decreased", "reduced",
+"patch", "hotfix", "fixed"). Keep every number, scope, and condition; state the current
+value, not the old one. Return each fact's index with its rewritten label and fact.
+
+Example: "Armor now costs the same upkeep as shields, down from double."
+becomes "Armor costs the same energy and alloy upkeep as a shield of the same tier."
+"""
+
+
+def rewrite_change_history(generator: Any, proposals: list[ProposedFact]) -> list[ProposedFact]:
+    """Give facts written as change history one rewrite before review rejects them."""
+    flagged = {
+        index: proposal
+        for index, proposal in enumerate(proposals)
+        if _HISTORY_WORDS.search(f"{proposal.label} {proposal.fact}")
+    }
+    if not flagged:
+        return proposals
+    user = "\n".join(
+        f"{index}: label: {proposal.label} | fact: {proposal.fact} | source: {proposal.quote}"
+        for index, proposal in flagged.items()
+    )
+    rewrites = request_json(generator, REWRITE_PROMPT, user, Rewrites)
+    updated = list(proposals)
+    for rewrite in rewrites.facts:  # type: ignore[attr-defined]
+        if rewrite.index in flagged and rewrite.fact.strip():
+            updated[rewrite.index] = flagged[rewrite.index].model_copy(
+                update={
+                    "label": rewrite.label.strip() or flagged[rewrite.index].label,
+                    "fact": rewrite.fact.strip(),
+                }
+            )
+    return updated
 
 
 def request_terms(generator: Any, title: str, facts: list[ProposedFact]) -> dict[str, list[str]]:
@@ -648,6 +756,25 @@ def _note_key(title: str) -> str:
     return re.sub(r"[^0-9a-z]+", "-", title.strip().lower()).strip("-")
 
 
+def _match_note(title: str, graph: KnowledgeGraph) -> tuple[str, Any]:
+    """Resolve a proposed note title, tolerating extra words such as "Infernals Systems".
+
+    An unknown title becomes a new note rather than a rejection: weaker models often name a
+    sensible new concept but forget to flag it as new.
+    """
+    key = _note_key(title)
+    if key in graph.notes:
+        return key, graph.notes[key]
+    words = set(key.split("-"))
+    matches = [
+        (len(note_key), note_key) for note_key in graph.notes if set(note_key.split("-")) <= words
+    ]
+    if matches:
+        note_key = max(matches)[1]
+        return note_key, graph.notes[note_key]
+    return key, None
+
+
 def review_proposals(
     proposals: list[ProposedFact], release_text: str, graph: KnowledgeGraph
 ) -> Review:
@@ -658,8 +785,7 @@ def review_proposals(
     for proposal in proposals:
         label = proposal.label.strip().rstrip(":")
         fact = " ".join(proposal.fact.split())
-        key = _note_key(proposal.note)
-        note = graph.notes.get(key)
+        key, note = _match_note(proposal.note, graph)
         reason = None
         # A quote filled from cited release-note lines is the source text itself.
         if not proposal.lines and (
@@ -671,8 +797,8 @@ def review_proposals(
             reason = "missing or overlong label or fact"
         elif _HISTORY_WORDS.search(f"{label} {fact}"):
             reason = "uses change-history wording"
-        elif note is None and not proposal.new_note:
-            reason = f"unknown note '{proposal.note}'"
+        elif note is not None and (note.always or note.version_independent):
+            reason = f"'{note.title}' is curated by hand"
         elif (key, label.lower()) in seen:
             reason = "duplicate label in this release"
         elif proposal.supersedes_label and (
@@ -688,7 +814,14 @@ def review_proposals(
             continue
         seen.add((key, label.lower()))
         review.accepted.append(
-            proposal.model_copy(update={"label": label, "fact": fact, "new_note": note is None})
+            proposal.model_copy(
+                update={
+                    "label": label,
+                    "fact": fact,
+                    "new_note": note is None,
+                    "note": note.title if note else proposal.note.strip(),
+                }
+            )
         )
     return review
 
@@ -892,6 +1025,7 @@ def render_summary(
                 f" (replaces '{proposal.supersedes_label}')" if proposal.supersedes_label else ""
             )
             lines.append(f"- **{proposal.note}** / {proposal.label}{replaced}")
+            lines.append(f"  - Fact: {proposal.fact}")
             cited = ", ".join(f"L{number}" for number in proposal.lines)
             lines.append(f'  - Source{f" ({cited})" if cited else ""}: "{proposal.quote.strip()}"')
     if review.rejected:

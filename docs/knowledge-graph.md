@@ -159,19 +159,24 @@ reviews them as a pull request.
    are found and no beta is. A release line that launches only inside a DLC announcement
    (4.4 arrived as `Stellaris: Nomads is available now!`) has no version in its title; the
    report then asks for its main notes when the line's first hotfix is processed.
-3. **Propose facts.** `update` sends the release notes (split only above 24,000 characters,
-   so a typical hotfix goes in one request) together with every note and the full text of
-   its current facts. The prompt asks for every change to how the game plays, whatever
-   section it is listed under (mechanic changes often appear under "Bugfix"), keeping scope
-   and conditions, and prefers proposing a borderline change over omitting one. The model
-   returns structured proposals: target note or a new concept, label, present-tense fact, a
-   verbatim quote, and the label of any fact it supersedes. The configured model is pinned on
-   every request and reported in the summary, the provider's default temperature is kept
-   (Gemini 3 is tuned for 1.0), and responses may use up to 8,192 output tokens where the
-   endpoint allows. Small local models may struggle with the roughly 12,000-token requests.
-4. **Validate.** A proposal is rejected when its quote is not in the fetched notes, it uses
-   change-history wording, it names an unknown note without asking for a new one, or the fact it
-   claims to supersede does not exist. New notes get terms for every locale from a second request
+3. **Propose facts.** `update` numbers every change line (L1, L2, ...) after dropping sections
+   that never change play (Modding, UI/UX, Graphics, Stability/Performance), and sends it with
+   every note and the full text of its current facts. Posts written mostly as prose number
+   every line. A worked example shows the usual traps: a mechanic change listed under
+   "Bugfix", scope and numbers merged into one fact, current values instead of change history,
+   a new concept note, and lines to skip. The model must cite each line in a fact or list it as
+   skipped; lines left out are asked about again, skipped lines that are not display-only get a
+   second look (weaker models are sometimes too cautious), and facts written as change history
+   get one rewrite. Quotes are filled from the cited lines. Gemini defaults to the Advisor's
+   Flash-Lite model, which keeps up with this structure: on the 4.5.2 notes it recovered all 19
+   reviewed gameplay changes in three of three runs, with a few display-only extras for review.
+   The configured model is pinned on every request and reported in the summary, and transient
+   provider errors are retried.
+4. **Validate.** A proposal is rejected when it cites no release-note line, still uses
+   change-history wording, targets a hand-curated note (`always` or `version_independent`), or
+   claims to supersede a fact that does not exist. An unknown note title resolves to an
+   existing note whose title words it contains ("Infernals Systems" becomes "Infernals"), or
+   else becomes a new note. New notes get terms for every locale from a second request
    and are rejected without them.
 5. **Edit.** Accepted facts are added with `{since: <release>}` before the note's `Related:` line.
    A superseded fact, or a current fact with the same label, is closed with `until`. The release is

@@ -251,13 +251,25 @@ def test_review_rejects_unquoted_historical_and_misplaced_facts():
 
     review = pipeline.review_proposals(proposals, source, graph)
 
-    assert [proposal.label for proposal in review.accepted] == ["Branch Offices"]
+    assert [(proposal.note, proposal.new_note) for proposal in review.accepted] == [
+        ("Branch Offices", False),
+        ("Imaginary Note", True),
+    ]
     assert [reason for _, reason in review.rejected] == [
         "cites no release-note line",
         "uses change-history wording",
-        "unknown note 'Imaginary Note'",
         "fact to supersede 'Missing Label' not found",
     ]
+
+
+def test_proposed_note_titles_resolve_to_existing_notes():
+    graph = load_knowledge_graph(FIXTURE_GRAPH)
+    proposal = pipeline.ProposedFact(**_proposal(note="Branch Offices Policy", label="Fee"))
+
+    review = pipeline.review_proposals([proposal], pipeline.clean_bbcode(RELEASE_TEXT), graph)
+
+    assert review.accepted[0].note == "Branch Offices"
+    assert review.accepted[0].new_note is False
 
 
 def test_update_writes_reviewable_graph_changes(knowledge_copy: Path, tmp_path: Path, monkeypatch):
@@ -609,8 +621,10 @@ def test_unclassified_lines_are_asked_about_again(knowledge_copy: Path):
 
     proposals, problems = pipeline.propose_facts(generator, release, graph, chunk_chars=24000)
 
-    assert len(generator.calls) == 2
+    # Analysis, the follow-up about unclassified lines, then a second look at skipped L2.
+    assert len(generator.calls) == 3
     assert "L2: Fixed a crash when opening the market." in generator.calls[1]
+    assert "L2: Fixed a crash" in generator.calls[2] and "L3:" not in generator.calls[2]
     assert "L3: The Quantum Forge" in generator.calls[1]
     assert problems == [
         "Lines never classified by the model: L3 (The Quantum Forge converts 10 Alloys into 1 Dark Matter each)"
@@ -627,3 +641,26 @@ def test_prose_announcements_number_every_line():
     excerpt = pipeline.number_release_lines(text)[0]
 
     assert len(excerpt.lines) == 3
+
+
+def test_curated_notes_are_never_drafted_into(tmp_path: Path):
+    from stellaris_companion.knowledge_graph import load_knowledge_graph as load
+
+    directory = tmp_path / "knowledge"
+    shutil.copytree(FIXTURE_GRAPH, directory)
+    (directory / "concepts" / "guardrails.md").write_text(
+        "---\nterms:\n  en: [guardrails]\nalways: true\nversion_independent: true\n---\n"
+        "# Interpretation Guardrails\n\n- **Evidence:** Save evidence first. {since: 4.4.6}\n",
+        encoding="utf-8",
+    )
+    load.cache_clear()
+    proposal = pipeline.ProposedFact(
+        **_proposal(note="Interpretation Guardrails", label="Map Mode")
+    )
+
+    review = pipeline.review_proposals(
+        [proposal], pipeline.clean_bbcode(RELEASE_TEXT), load(directory)
+    )
+
+    assert review.rejected[0][1] == "'Interpretation Guardrails' is curated by hand"
+    load.cache_clear()
